@@ -286,18 +286,28 @@ def main():
             "\n"
             "if DRIVER==6\n"
             ";### MSX TCP/IP UNAPI transfer-area call/buffer block\n"
-            "una_trampoline_area ds 192\n"
             "una_tramp_fn       db 0\n"
             "una_tramp_a        db 0\n"
             "una_tramp_bc       dw 0\n"
             "una_tramp_de       dw 0\n"
             "una_tramp_hl       dw 0\n"
-            "una_tramp_iy       dw 0\n"
-            "una_tramp_savep1   db 0\n"
+            "una_tramp_entry    dw 0\n"
             "una_trn_iobuf      ds UNA_IO_MAX\n"
             "una_trn_openbuf    ds 13\n"
             "una_trn_dnsbuf     ds 256\n"
             "endif"
+        ),
+    )
+
+    text = replace_once(
+        text,
+        "prgend  ld a,(neticnid)",
+        (
+            "prgend\n"
+            "if DRIVER==6\n"
+            "        call una_shutdown\n"
+            "endif\n"
+            "        ld a,(neticnid)"
         ),
     )
 

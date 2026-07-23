@@ -13,7 +13,7 @@ GENERATED := build/Dmn-Network-Head-UNAPI.asm build/Dmn-Network-UNAPI-integrated
 netd-una.exe: $(WRAPPER) Dmn-Network-UNAPI.asm $(GENERATED)
 	$(ASM) $(WRAPPER) -ob netd-una.exe
 
-$(GENERATED): tools/generate_integrated_daemon.py ../symsys-networkdaemon/Dmn-Network-Head.asm ../symsys-networkdaemon/Dmn-Network.asm ../symdoc-developer/symbos_lib-SystemManager.asm ../symdoc-developer/symbos_lib-DesktopManager.asm ../symdoc-developer/symbos_lib-FileManager.asm
+$(GENERATED) &: tools/generate_integrated_daemon.py ../symsys-networkdaemon/Dmn-Network-Head.asm ../symsys-networkdaemon/Dmn-Network.asm ../symdoc-developer/symbos_lib-SystemManager.asm ../symdoc-developer/symbos_lib-DesktopManager.asm ../symdoc-developer/symbos_lib-FileManager.asm
 	python3 tools/generate_integrated_daemon.py
 
 build/netd-una-scc.s: tools/generate_scc_daemon.py Dmn-Network-UNAPI.asm $(GENERATED)

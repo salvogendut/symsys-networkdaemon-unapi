@@ -15,19 +15,21 @@ backend with TCP/IP UNAPI calls on MSX hosts.
 
 ## Current Scope
 
-The first backend target is intentionally narrow:
+The current backend target is intentionally narrow:
 
-- Detect TCP/IP UNAPI through EXTBIO using the `"TCP/IP"` implementation name.
-- Support direct page-3 implementations and mapped page-1 implementations via
-  the UNAPI RAM helper.
+- Detect a mapped TCP/IP UNAPI provider through EXTBIO while MSX-DOS and the
+  BIOS are still active.
+- Snapshot the provider with `SYMUNAPI.COM`, then import it into a
+  SymbOS-owned secondary bank.
+- Invoke the provider with SymbOS `BNKCLL`/`BNKRET`; the MSX kernel's
+  `BNK16C` entry is an unimplemented stub and cannot be used.
 - Provide active TCP client open/status/receive/send/close/disconnect.
 - Route daemon DNS through TCP/IP UNAPI DNS calls.
 - Defer passive TCP server and UDP until the TCP client path is verified on real
   MSX hardware and emulator setups.
 
-This follows the GeoBench MSX UNAPI work, especially the rule that I/O buffers
-used by UNAPI must live outside the application page because mapped UNAPI calls
-may replace page 1.
+ROM/direct providers are not imported yet. The current path requires the mapped
+provider type used by OpenMSXnet and the OCM/SM-X RAM package.
 
 ## Build Notes
 
@@ -40,12 +42,38 @@ under `build/`:
 python3 tools/generate_integrated_daemon.py
 ```
 
-`make check` syntax-checks `Dmn-Network-UNAPI.asm` in isolation and assembles the
-integrated daemon wrapper. The current integrated artifact is:
+The production executable is built with SCC:
+
+```sh
+make -j4
+make check
+```
+
+This creates `netd-una-scc.exe` and copies it to `netd-una.exe`.
+
+Stage the daemon and DOS snapshotter in the installed SymbOS QA image:
+
+```sh
+make stage-msx-symbos
+```
+
+The MSX-DOS boot order must be:
 
 ```text
-netd-una.exe
+UNAPINET              (or the real hardware UNAPI loader)
+SYMUNAPI
+CD SYMBOS
+SYM
 ```
+
+Run the repository image with at least 1MB RAM:
+
+```sh
+tools/run_msx.sh QA/MSXSYMBOS.IMG
+```
+
+The daemon reserves one secondary bank (`0400h-FEFFh`) for the imported
+provider, its private buffers, wrapper, and stack.
 
 ## MSX UNAPI Spike
 
@@ -83,8 +111,9 @@ MSX_SHOTS="20 30" tools/run_msx.sh
 ```
 
 Without the TSR, the expected diagnostic result is "No TCP/IP UNAPI
-implementation found"; with it, the probe reports implementation count,
-slot/segment/entry, call path, `GET_INFO`, `GET_CAPAB`, DNS, and active TCP.
+implementation found". With it, `SYMUNAPI.COM` writes `SYMUNAPI.DAT` and
+`SYMUNAPI.SEG`; the daemon reports `ONLINE` only after provider `GET_INFO` and
+`GET_CAPAB` calls succeed.
 
 The current smoke test resolves `localhost`, then connects to port 8080 through
 openMSXnet. Run a host HTTP server while launching the emulator:
@@ -107,3 +136,6 @@ TCP_RCV err: 00 bytes: 0100
 TCP_CLOSE err: 00
 TCP smoke OK
 ```
+
+The SymbOS-side `NETRAW 1.1.1.1 80` test has also been verified to return
+`open res=0` through the imported provider.

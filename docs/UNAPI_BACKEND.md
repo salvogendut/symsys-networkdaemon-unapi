@@ -32,22 +32,32 @@ The shared daemon calls the backend through these labels:
 The daemon owns the SymbOS process messaging layer and socket records. The UNAPI
 backend only maps between daemon sockets and UNAPI connection handles.
 
-## UNAPI Discovery
+## Discovery And Import
 
-TCP/IP UNAPI is discovered through EXTBIO:
+`SYMUNAPI.COM` runs under MSX-DOS before `SYM.COM` and discovers TCP/IP UNAPI
+through EXTBIO:
 
 1. Write `"TCP/IP",0` to the UNAPI argument buffer at `#F847`.
 2. Call EXTBIO (`#FFCA`) with `A=0`, `DE=#2222`.
 3. If `B=0`, no TCP/IP implementation exists.
 4. Call EXTBIO with `A=1`, `DE=#2222` to obtain the selected implementation.
 5. `A` is the slot, `B` is the segment, and `HL` is the entry address.
-6. If `HL >= #C000`, call the implementation directly.
-7. If `HL < #C000` and the segment is not `#FF`, obtain the UNAPI RAM helper
-   with EXTBIO `A=#FF`, then call through the helper with `IY=slot:segment` and
-   `IX=entry`.
+6. For a mapped provider (`HL < #C000`, segment other than `#FF`), obtain the
+   UNAPI RAM helper with EXTBIO `A=#FF`.
+7. Read the complete mapped 16K provider through RAMHELPR `READRAM`.
+8. Write metadata to `A:/SYMUNAPI.DAT` and the provider image to
+   `A:/SYMUNAPI.SEG`.
 
-ROM-slot mapped implementations (`segment=#FF` with an entry below `#C000`) are
-left as a later target. GeoBench currently treats these as unsupported too.
+The daemon reserves `#0400-#FEFF` in a free SymbOS secondary bank and loads the
+snapshot at its original `#4000` address. It installs a wrapper, private stack,
+and call buffers in page 3, then enters the bank through `BNKCLL` and exits
+through `BNKRET`.
+
+This full-bank call is required on MSX. The `BNK16C` jump at `#8142` resolves
+to a `RET` stub in the tested SymbOS kernel, so it does not execute a
+16K-resident routine.
+
+Direct page-3 and ROM-slot providers are left as later targets.
 
 ## TCP/IP UNAPI Calls
 
@@ -80,14 +90,26 @@ routes DNS through `unadns/unadnr` instead of the UDP DNS path.
 
 ## Buffer Placement
 
-UNAPI calls may page out the daemon's page-1 code while executing. Any buffer
-given to UNAPI must live in memory that remains visible to the implementation.
+`BNKCLL` replaces the application's complete 64K view. No application pointer
+is valid while the provider is executing, so all register blocks and pointed-to
+data are marshalled into the provider bank first.
 
-The backend reserves a page-3 staging buffer at `una_iobuf`. TCP send/receive
-copy between SymbOS application banks and this buffer with the kernel
-`jmp_bnkcop` service before calling UNAPI. Each low-level call is clamped to the
-1024-byte staging buffer; larger sends rely on the daemon's existing partial
-send contract and should be retried by the caller.
+The provider-bank layout is:
+
+```text
+4000-7FFF  Captured 16K UNAPI provider
+C000-C3FF  TCP send/receive buffer
+C400-C40C  TCP open parameter block
+C500-C5FF  DNS name buffer
+F800-...   UNAPI call wrapper
+F880-...   Marshalled register block
+FEF0       Interbank-call stack top
+FF00-FFFF  SymbOS interbank jump routines
+```
+
+TCP send/receive copies between caller banks, the daemon transfer area, and the
+provider bank with `BNKCOP`. Calls are clamped to the 1024-byte staging buffer;
+larger sends use the daemon's partial-send contract.
 
 ## Status Mapping
 
@@ -106,5 +128,11 @@ Available RX bytes come from `TCPIP_TCP_STATE` output `HL`.
   backend-owned because TCP/IP UNAPI owns the network setup.
 - Passive TCP and UDP are not implemented in the first backend file. Returning
   `neterrfnc` is preferable to pretending support exists.
-- Cross-bank memory copies now use `jmp_bnkcop`, but still need real SymbOS
-  runtime verification under openMSX with the daemon loaded.
+- The imported provider consumes almost one complete 64K SymbOS bank, so the
+  MSX should have at least 1MB RAM for normal use.
+- The OCM/SM-X RAM provider uses the BIOS `H_TIMI` hook for some internal
+  timeout counters. Successful operations do not depend on expiry, but timeout
+  and missing-device paths still require explicit real-hardware stress testing
+  under SymbOS.
+- The bridge is verified under OpenMSXnet: startup reaches `ONLINE` after real
+  `GET_INFO`/`GET_CAPAB` calls and `NETRAW 1.1.1.1 80` returns `open res=0`.

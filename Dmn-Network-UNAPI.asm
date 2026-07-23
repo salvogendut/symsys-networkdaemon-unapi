@@ -7,8 +7,9 @@
 
 ; This backend implements the low* contract consumed by Dmn-Network.asm.
 ; Under SymbOS we do not call MSX EXTBIO directly. SYMUNAPI.COM must run under
-; MSX-DOS before SYM.COM; it discovers TCP/IP UNAPI and writes SYMUNAPI.DAT.
-; This daemon reads that file through the SymbOS FileManager.
+; MSX-DOS before SYM.COM; it discovers TCP/IP UNAPI and writes metadata plus a
+; complete image of the mapped provider. The daemon imports that image into a
+; dedicated SymbOS bank and invokes it with the kernel interbank-call API.
 
 ;--- UNAPI CONTROL ROUTINES ---------------------------------------------------
 ;### UNAINI -> init TCP/IP UNAPI and setup daemon-visible network state
@@ -57,26 +58,22 @@ SYMUNA_MAGIC_O  equ 0
 SYMUNA_VERSION_O equ 8
 SYMUNA_STATUS_O equ 9
 SYMUNA_KIND_O   equ 10
-SYMUNA_SLOT_O   equ 11
-SYMUNA_SEGMENT_O equ 12
 SYMUNA_ENTRY_O  equ 13
-SYMUNA_HELPER_O equ 15
-SYMUNA_IY_O     equ 17
-SYMUNA_FN_O     equ 19
-SYMUNA_A_O      equ 20
-SYMUNA_BC_O     equ 21
-SYMUNA_DE_O     equ 23
-SYMUNA_HL_O     equ 25
-SYMUNA_PUTP1_O  equ 27
-SYMUNA_GETP1_O  equ 29
-SYMUNA_CALL_O   equ 32
-SYMUNA_IOBUF_O  equ #100
 
-UNAPI_DIRECT    equ 1
 UNAPI_MAPPED    equ 2
 
 UNA_IO_MAX      equ 1024
-UNA_SEND_CHUNK  equ 512
+UNA_PROVIDER_SIZE equ #4000
+UNA_BANK_BASE   equ #0400
+UNA_BANK_SIZE   equ #fb00
+UNA_BANK_PROVIDER equ #4000
+UNA_BANK_IOBUF  equ #c000
+UNA_BANK_OPENBUF equ #c400
+UNA_BANK_DNSBUF equ #c500
+UNA_BANK_WRAPPER equ #f800
+UNA_BANK_PARAM  equ #f880
+UNA_BANK_STACK  equ #fef0
+UNA_PARAM_SIZE  equ 10
 
 TCPIP_GET_INFO  equ 0
 TCPIP_GET_CAPAB equ 1
@@ -91,7 +88,10 @@ TCPIP_TCP_RCV   equ 18
 TCPIP_WAIT      equ 29
 
 UNA_ERR_OK      equ 0
+UNA_ERR_NOT_IMP equ 1
+UNA_ERR_NO_NET  equ 2
 UNA_ERR_NO_DATA equ 3
+UNA_ERR_NO_FREE equ 9
 UNA_ERR_NO_CONN equ 11
 UNA_ERR_BUFFER  equ 13
 
@@ -103,15 +103,11 @@ UNA_TCP_CLOSE_WAIT   equ 7
 ;--- BACKEND STATE ------------------------------------------------------------
 
 una_ready       db 0
-una_bridge_base dw 0
 una_kind        db 0
-una_slot        db 0
-una_segment     db 0
 una_entry       dw 0
-una_helper      dw 0
-una_iy          dw 0            ;IY = slot:segment for CALL_MAP helper
-una_putp1       dw 0
-una_getp1       dw 0
+una_provider_bank db 0
+una_provider_addr dw 0
+una_provider_memrec dw 0
 
 una_fn          db 0
 una_a           db 0
@@ -119,6 +115,7 @@ una_bc          dw 0
 una_de          dw 0
 una_hl          dw 0
 una_info_handle db 0
+una_provider_handle db 0
 una_info_buf    ds 32
 
 una_handles     ds low_sockmax
@@ -148,6 +145,7 @@ unaini  or a
         ret
 
 unaini_detect
+        call una_shutdown
         call una_load_info_file
         jr c,unaini_fail
         ld ix,una_info_buf
@@ -157,27 +155,22 @@ unaini_detect
 
         ld a,(ix+SYMUNA_KIND_O)
         ld (una_kind),a
-        ld a,(ix+SYMUNA_SLOT_O)
-        ld (una_slot),a
-        ld a,(ix+SYMUNA_SEGMENT_O)
-        ld (una_segment),a
         ld l,(ix+SYMUNA_ENTRY_O)
         ld h,(ix+SYMUNA_ENTRY_O+1)
         ld (una_entry),hl
-        ld l,(ix+SYMUNA_HELPER_O)
-        ld h,(ix+SYMUNA_HELPER_O+1)
-        ld (una_helper),hl
-        ld l,(ix+SYMUNA_IY_O)
-        ld h,(ix+SYMUNA_IY_O+1)
-        ld (una_iy),hl
-        ld l,(ix+SYMUNA_PUTP1_O)
-        ld h,(ix+SYMUNA_PUTP1_O+1)
-        ld (una_putp1),hl
-        ld l,(ix+SYMUNA_GETP1_O)
-        ld h,(ix+SYMUNA_GETP1_O+1)
-        ld (una_getp1),hl
-        call una_normalize_mapper_calls
-        call una_install_trampoline
+        ld a,(una_kind)
+        cp UNAPI_MAPPED
+        jr nz,unaini_fail
+        ld hl,(una_entry)
+        ld a,h
+        cp #40
+        jr c,unaini_fail
+        cp #80
+        jr nc,unaini_fail
+        call una_loadp
+        jr c,unaini_fail
+        call una_probe_caps
+        jr c,unaini_fail
         ld a,1
         ld (una_ready),a
         ld a,#ff
@@ -186,27 +179,45 @@ unaini_detect
         ret
 
 unaini_fail
-        xor a
-        ld (una_ready),a
-        ld (una_kind),a
-        ld (net_status),a
+        call una_shutdown
         scf
         ld a,neterrnhw
         ret
 
-una_normalize_mapper_calls
-        ld hl,(una_putp1)
-        ld de,(una_getp1)
+;### UNA_SHUTDOWN -> release the imported provider and clear runtime state
+una_shutdown
+        xor a
+        ld (una_ready),a
+        ld (una_kind),a
+        ld (net_status),a
+        ld hl,(una_provider_memrec)
+        ld a,h
+        or l
+        jr z,una_shutdown_free
+        xor a
+        ld (hl),a
+        inc hl
+        ld (hl),a
+        inc hl
+        ld (hl),a
+        inc hl
+        ld (hl),a
+        inc hl
+        ld (hl),a
+        ld hl,0
+        ld (una_provider_memrec),hl
+una_shutdown_free
+        ld a,(una_provider_bank)
         or a
-        sbc hl,de
-        ret c                       ;PUT_P1 < GET_P1, expected order
-        ret z
-        ld hl,(una_putp1)
-        push hl
-        ld hl,(una_getp1)
-        ld (una_putp1),hl
-        pop hl
-        ld (una_getp1),hl
+        jr z,una_shutdown_done
+        ld hl,(una_provider_addr)
+        ld bc,UNA_BANK_SIZE
+        rst #20:dw jmp_memfre
+una_shutdown_done
+        xor a
+        ld (una_provider_bank),a
+        ld hl,0
+        ld (una_provider_addr),hl
         ret
 
 una_load_info_file
@@ -235,14 +246,119 @@ una_load_sig
         inc hl
         inc de
         djnz una_load_sig
+        ld a,(una_info_buf+SYMUNA_VERSION_O)
+        cp 2
+        jr nz,una_load_fail
         xor a
         ret
 una_load_fail
         scf
         ret
 
-una_bridge_magic db "SYMUNA1",0
+una_bridge_magic db "SYMUNA2",0
 una_info_path db "A:/SYMUNAPI.DAT",0
+una_provider_path db "A:/SYMUNAPI.SEG",0
+
+;### UNA_LOAD_PROVIDER -> reserve a whole bank and import the provider image
+;### Output CF=0 ok, CF=1 allocation/file/image error
+una_loadp
+        xor a
+        ld e,0
+        ld bc,UNA_BANK_SIZE
+        rst #20:dw jmp_memget
+        ret c
+        ld (una_provider_bank),a
+        ld (una_provider_addr),hl
+
+        ld a,h
+        cp UNA_BANK_BASE/256
+        jr nz,una_loadp_fail
+        ld a,l
+        or a
+        jr nz,una_loadp_fail
+        call una_register_provider
+        jr c,una_loadp_fail
+
+        ld hl,una_provider_path
+        ld a,(App_BnkNum)
+        db #dd:ld h,a
+        call SyFile_FILOPN
+        jr c,una_loadp_fail
+        ld (una_provider_handle),a
+        ld hl,UNA_BANK_PROVIDER
+        ld a,(una_provider_bank)
+        ld e,a
+        ld bc,UNA_PROVIDER_SIZE
+        ld a,(una_provider_handle)
+        call SyFile_FILINP
+        push af
+        push bc
+        ld a,(una_provider_handle)
+        call SyFile_FILCLO
+        pop bc
+        pop af
+        jr c,una_loadp_fail
+        ld a,b
+        cp UNA_PROVIDER_SIZE/256
+        jr nz,una_loadp_fail
+        ld a,c
+        or a
+        jr nz,una_loadp_fail
+
+        call una_prepare_provider
+        ret nc
+una_loadp_fail
+        call una_shutdown
+        scf
+        ret
+
+; Register the allocation so Program Manager can reclaim it after an external
+; process termination as well as through our normal shutdown path.
+una_register_provider
+        ld hl,App_BegCode+prgpstmem
+        ld b,8
+una_register_find
+        ld a,(hl)
+        or a
+        jr z,una_register_found
+        ld de,5
+        add hl,de
+        djnz una_register_find
+        scf
+        ret
+una_register_found
+        ld (una_provider_memrec),hl
+        ld a,(una_provider_bank)
+        ld (hl),a
+        inc hl
+        ld de,(una_provider_addr)
+        ld (hl),e
+        inc hl
+        ld (hl),d
+        inc hl
+        ld de,UNA_BANK_SIZE
+        ld (hl),e
+        inc hl
+        ld (hl),d
+        or a
+        ret
+
+; Install the wrapper in the dedicated bank. The wrapper and all buffers live
+; in page 3, which remains available to code entered through BNKCLL.
+una_prepare_provider
+        ld hl,una_exec_wrap
+        ld de,UNA_BANK_WRAPPER
+        ld bc,una_exec_end-una_exec_wrap
+        ld a,(una_provider_bank)
+        add a:add a:add a:add a
+        ld d,a
+        ld a,(App_BnkNum)
+        or d
+        ld de,UNA_BANK_WRAPPER
+        rst #20:dw jmp_bnkcop
+
+        or a
+        ret
 
 ;### UNA_PROBE_CAPS -> verify TCP/IP UNAPI info and active TCP capability
 ;### Output CF=0 ok, CF=1 unsupported
@@ -259,7 +375,6 @@ una_probe_caps
         ld de,#0100
         or a
         sbc hl,de
-        ccf
         ret c
         ld a,TCPIP_GET_CAPAB
         ld bc,#0100
@@ -305,17 +420,17 @@ unatop  ld b,a
         ld a,(ix+5):ld (hl),a:inc hl
         ld a,(ix+6):ld (hl),a:inc hl
         ld a,(ix+7):ld (hl),a:inc hl
-        ld (hl),#ff:inc hl        ;random local port
-        ld (hl),#ff
+        ld a,(ix+0):ld (hl),a:inc hl
+        ld a,(ix+1):ld (hl),a
         pop bc
 
         ld a,TCPIP_TCP_OPEN
         ld bc,0
         ld de,0
         ld hl,una_trn_openbuf
-        scf
-        ld a,neterrfnc            ;runtime UNAPI calls disabled in safe build
-        ret
+        call una_call
+        or a
+        jp nz,una_map_call_error
         ld a,(una_bc+1)           ;B=UNAPI connection handle
         or a
         scf
@@ -585,12 +700,9 @@ unadns  ld a,(una_ready)
         scf
         ld a,neterrnhw
         ret z
-        scf
-        ld a,neterrfnc            ;runtime UNAPI calls disabled in safe build
-        ret
         ld hl,pck_buffer+3
         ld de,una_trn_dnsbuf
-        ld b,0
+        ld b,255
 unadns_copy
         ld a,(hl)
         ld (de),a
@@ -609,19 +721,14 @@ unadns_call
         call una_call
         or a
         ret z
-        scf
-        ld a,neterrdto
-        ret
+        jp una_map_dns_error
 
 ;### UNADNR -> DNS check for resolve
 ;### Input      UNADNS has been called before
 ;### Output     CF=0 -> IP received, IX,IY=IP
 ;###            CF=1 -> A=status (0=still in progress, >0=error)
 ;### Destroyed  AF,BC,DE,HL,IX,IY
-unadnr  scf
-        ld a,neterrfnc            ;runtime UNAPI calls disabled in safe build
-        ret
-        call una_wait
+unadnr  call una_wait
         ld a,TCPIP_DNS_S
         ld bc,0
         ld de,0
@@ -677,7 +784,51 @@ una_call
         ld (una_bc),bc
         ld (una_de),de
         ld (una_hl),hl
-        call una_trampoline_area
+        call una_stage_call
+
+        ld a,(una_fn)
+        ld (una_tramp_fn),a
+        xor a
+        ld (una_tramp_a),a
+        ld bc,(una_bc)
+        ld (una_tramp_bc),bc
+        ld de,(una_de)
+        ld (una_tramp_de),de
+        ld hl,(una_hl)
+        ld (una_tramp_hl),hl
+        ld hl,(una_entry)
+        ld (una_tramp_entry),hl
+
+        ld hl,una_tramp_fn
+        ld de,UNA_BANK_PARAM
+        ld bc,UNA_PARAM_SIZE
+        call una_copy_app_provider
+
+        push ix
+        push iy
+        ld ix,UNA_BANK_WRAPPER
+        ld a,(una_provider_bank)
+        ld b,a
+        ld iy,UNA_BANK_STACK
+        call jmp_bnkcll
+        pop iy
+        pop ix
+
+        ld hl,UNA_BANK_PARAM
+        ld de,una_tramp_fn
+        ld bc,UNA_PARAM_SIZE
+        call una_copy_provider_app
+
+        ld a,(una_tramp_a)
+        ld (una_a),a
+        ld bc,(una_tramp_bc)
+        ld (una_bc),bc
+        ld de,(una_tramp_de)
+        ld (una_de),de
+        ld hl,(una_tramp_hl)
+        ld (una_hl),hl
+        call una_unstage_call
+        ld a,(una_a)
         ret
 
 una_wait
@@ -694,116 +845,146 @@ una_wait
         pop bc
         ret
 
-unatramp_src_beg
-        push ix
-        push iy
-        ld a,(una_kind)
-        cp UNAPI_DIRECT
-        jr z,unatramp_src_direct
-        cp UNAPI_MAPPED
-        jr z,unatramp_src_mapped
-        ld a,15
-        ld bc,0
-        ld de,0
-        ld hl,0
-        jr unatramp_src_store
-
-unatramp_src_direct
-unatramp_direct_ret
-        ld hl,0
+; Copied into page 3 of the dedicated provider bank. BNKCLL maps the complete
+; bank and gives this routine its private stack. It must return via BNKRET.
+UNA_EXEC_RETURN equ UNA_BANK_WRAPPER+una_exec_ret-una_exec_wrap
+una_exec_wrap
+        ld hl,UNA_EXEC_RETURN
         push hl
-        ld hl,(una_entry)
+        ld hl,(UNA_BANK_PARAM+8)
         push hl
-        jr unatramp_src_regs
-
-unatramp_src_mapped
-        ld a,(una_fn)
-        ld (una_tramp_fn),a
-        ld hl,(una_bc)
-        ld (una_tramp_bc),hl
-        ld hl,(una_de)
-        ld (una_tramp_de),hl
-        ld hl,(una_hl)
-        ld (una_tramp_hl),hl
-        in a,(#fd)
-        ld (una_tramp_savep1),a
-        ld a,(una_segment)
-        out (#fd),a
-utmra
-        ld hl,0
-        push hl
-        ld hl,(una_entry)
-        push hl
-        ld a,(una_tramp_fn)
-        ld bc,(una_tramp_bc)
-        ld de,(una_tramp_de)
-        ld hl,(una_tramp_hl)
+        ld a,(UNA_BANK_PARAM+0)
+        ld bc,(UNA_BANK_PARAM+2)
+        ld de,(UNA_BANK_PARAM+4)
+        ld hl,(UNA_BANK_PARAM+6)
         ret
+una_exec_ret
+        ld (UNA_BANK_PARAM+1),a
+        ld (UNA_BANK_PARAM+2),bc
+        ld (UNA_BANK_PARAM+4),de
+        ld (UNA_BANK_PARAM+6),hl
+        jp jmp_bnkret
+una_exec_end
 
-utmr
-        ld (una_tramp_a),a
-        ld (una_tramp_bc),bc
-        ld (una_tramp_de),de
-        ld (una_tramp_hl),hl
-        ld a,(una_tramp_savep1)
-        out (#fd),a
-        ld a,(una_tramp_a)
-        ld bc,(una_tramp_bc)
-        ld de,(una_tramp_de)
-        ld hl,(una_tramp_hl)
-        jr unatramp_src_store
-
-unatramp_src_regs
+; Marshal pointers and data into addresses that remain visible while the
+; complete provider bank is mapped.
+una_stage_call
         ld a,(una_fn)
-        ld bc,(una_bc)
-        ld de,(una_de)
-        ld hl,(una_hl)
+        cp TCPIP_TCP_OPEN
+        jr z,una_stage_open
+        cp TCPIP_DNS_Q
+        jr z,una_stage_dns
+        cp TCPIP_TCP_SEND
+        jr z,una_stage_send
+        cp TCPIP_TCP_RCV
+        jr z,una_stage_receive
         ret
-
-unatramp_src_store
-        ld (una_a),a
-        ld (una_bc),bc
-        ld (una_de),de
+una_stage_open
+        ld hl,una_trn_openbuf
+        ld de,UNA_BANK_OPENBUF
+        ld bc,13
+        call una_copy_app_provider
+        ld hl,UNA_BANK_OPENBUF
         ld (una_hl),hl
-        pop iy
-        pop ix
         ret
-unatramp_src_end
-
-una_install_trampoline
-        ld hl,unatramp_src_beg
-        ld de,una_trampoline_area
-        ld bc,unatramp_src_end-unatramp_src_beg
-        ldir
-        ld hl,una_trampoline_area
-        ld de,unatramp_src_store-unatramp_src_beg
-        add hl,de
-        push hl
-        ld hl,una_trampoline_area
-        ld de,unatramp_direct_ret-unatramp_src_beg+1
-        add hl,de
-        pop de
-        call una_patch_word
-        ld hl,una_trampoline_area
-        ld de,utmr-unatramp_src_beg
-        add hl,de
-        push hl
-        ld hl,una_trampoline_area
-        ld de,utmra-unatramp_src_beg+1
-        add hl,de
-        pop de
-        call una_patch_word
+una_stage_dns
+        ld hl,una_trn_dnsbuf
+        ld de,UNA_BANK_DNSBUF
+        ld bc,256
+        call una_copy_app_provider
+        ld hl,UNA_BANK_DNSBUF
+        ld (una_hl),hl
+        ret
+una_stage_send
+        ld hl,una_trn_iobuf
+        ld de,UNA_BANK_IOBUF
+        ld bc,(una_hl)
+        call una_copy_app_provider
+        ld hl,UNA_BANK_IOBUF
+        ld (una_de),hl
+        ret
+una_stage_receive
+        ld hl,UNA_BANK_IOBUF
+        ld (una_de),hl
         ret
 
-una_patch_word
-        ld (hl),e
-        inc hl
-        ld (hl),d
+; Copy received bytes back to the application's transfer staging buffer.
+una_unstage_call
+        ld a,(una_fn)
+        cp TCPIP_TCP_RCV
+        ret nz
+        ld a,(una_a)
+        or a
+        ret nz
+        ld bc,(una_bc)
+        call una_clamp_io
+        ld a,b
+        or c
+        ret z
+        ld hl,UNA_BANK_IOBUF
+        ld de,una_trn_iobuf
+        jp una_copy_provider_app
+
+; Input HL=source, DE=destination, BC=length.
+una_copy_app_provider
+        push de
+        ld a,(una_provider_bank)
+        add a:add a:add a:add a
+        ld d,a
+        ld a,(App_BnkNum)
+        or d
+        pop de
+        rst #20:dw jmp_bnkcop
+        ret
+
+; Input HL=source, DE=destination, BC=length.
+una_copy_provider_app
+        push de
+        ld a,(App_BnkNum)
+        add a:add a:add a:add a
+        ld d,a
+        ld a,(una_provider_bank)
+        or d
+        pop de
+        rst #20:dw jmp_bnkcop
         ret
 
 ;==============================================================================
 ;### HELPERS ##################################################################
 ;==============================================================================
+
+; Translate the small set of provider errors with direct SymbOS equivalents.
+una_map_call_error
+        cp UNA_ERR_NOT_IMP
+        jr z,una_map_not_imp
+        cp UNA_ERR_NO_NET
+        jr z,una_map_no_net
+        cp UNA_ERR_NO_FREE
+        jr z,una_map_no_free
+        scf
+        ld a,neterruhw
+        ret
+una_map_not_imp
+        scf
+        ld a,neterrfnc
+        ret
+una_map_no_net
+        scf
+        ld a,neterrcon
+        ret
+una_map_no_free
+        scf
+        ld a,neterrsfr
+        ret
+
+una_map_dns_error
+        cp UNA_ERR_NOT_IMP
+        jr z,una_map_not_imp
+        cp UNA_ERR_NO_NET
+        jr z,una_map_no_net
+        scf
+        ld a,neterrdto
+        ret
 
 una_clear_openbuf
         ld hl,una_trn_openbuf

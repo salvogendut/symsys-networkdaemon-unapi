@@ -1,9 +1,11 @@
-; SYMUNAPI.COM - MSX-DOS to SymbOS TCP/IP UNAPI bridge installer.
+; SYMUNAPI.COM - MSX-DOS to SymbOS TCP/IP UNAPI provider snapshotter.
 ;
 ; Run this after the TCP/IP UNAPI provider and RAMHELPR.COM, before SYM.COM.
-; It discovers the provider while MSX-DOS/BIOS calls are safe, installs a small
-; bridge at #C900, and exits. The bridge is not registered with DOS because
-; changing the TPA ceiling after startup hangs Nextor/COMMAND2 on this setup.
+; It discovers the provider while MSX-DOS/BIOS calls are safe and writes:
+;   SYMUNAPI.DAT - provider metadata
+;   SYMUNAPI.SEG - complete 16K mapped-RAM provider image
+; SymbOS imports the image into memory it owns instead of retaining DOS mapper
+; addresses, which cease to be valid after SYM.COM takes over the machine.
 
 BDOS            equ #0005
 _TERM0          equ #00
@@ -66,7 +68,7 @@ tpa_ok:
                 ld de,(bridge_base)
                 ld bc,8
                 ldir
-                ld a,1
+                ld a,2
                 ld e,SYMUNA_VERSION_O
                 call put_a
 
@@ -78,26 +80,49 @@ tpa_ok:
                 ld bc,bridge_call_code_end-bridge_call_code
                 ldir
                 call patch_bridge_code
+                call delete_segment_file
 
                 call discover_tcpip
-                jr c,installed
+                jr c,no_device
+                ld e,SYMUNA_KIND_O
+                call get_a
+                cp UNAPI_MAPPED
+                jr nz,unsupported
+                call write_segment_file
+                jr c,snapshot_failed
                 ld a,1
                 ld e,SYMUNA_STATUS_O
                 call put_a
                 ld de,msg_online
                 call strout
-                jr stay
+                jr persist
 
-installed:
+no_device:
                 xor a
                 ld e,SYMUNA_STATUS_O
                 call put_a
                 ld de,msg_nodev
                 call strout
+                jr persist
 
-stay:
+unsupported:
+                xor a
+                ld e,SYMUNA_STATUS_O
+                call put_a
+                ld de,msg_unsupported
+                call strout
+                jr persist
+
+snapshot_failed:
+                xor a
+                ld e,SYMUNA_STATUS_O
+                call put_a
+                ld de,msg_snapshot
+                call strout
+
+persist:
                 call write_info_file
-                ld de,msg_installed
+                ld de,msg_written
                 call strout
                 ld sp,(old_sp)
 quit:
@@ -210,6 +235,7 @@ discover_tcpip:
                 or l
                 scf
                 ret z
+                ld (tmp_helper),hl
                 ld b,h
                 ld c,l
                 ld de,SYMUNA_HELPER_O
@@ -304,6 +330,80 @@ write_info_file:
                 ld c,_FCLOSE
                 jp BDOS
 
+delete_segment_file:
+                ld hl,segment_fcb_template
+                ld de,info_fcb
+                ld bc,36
+                ldir
+                ld de,info_fcb
+                ld c,_FDELETE
+                jp BDOS
+
+; Save the complete mapped provider through RAMHELPR's READRAM entry. Reading
+; through the helper keeps the DOS TPA mapped while BDOS writes each record.
+write_segment_file:
+                ld hl,segment_fcb_template
+                ld de,info_fcb
+                ld bc,36
+                ldir
+                ld de,info_fcb
+                ld c,_FCREATE
+                call BDOS
+                inc a
+                scf
+                ret z
+
+                ld hl,(tmp_helper)
+                ld de,3
+                add hl,de
+                ld (tmp_reader),hl
+                ld hl,#4000
+                ld (snapshot_source),hl
+                ld a,128
+                ld (snapshot_records),a
+                ld de,snapshot_dma
+                ld c,_SETDMA
+                call BDOS
+
+snapshot_record:
+                ld hl,(snapshot_source)
+                ld de,snapshot_dma
+                ld c,128
+snapshot_byte:
+                ld a,(tmp_segment)
+                ld b,a
+                ld a,(tmp_slot)
+                ld ix,(tmp_reader)
+                call call_ix
+                ld (de),a
+                inc de
+                inc hl
+                dec c
+                jr nz,snapshot_byte
+                ld (snapshot_source),hl
+
+                ld de,info_fcb
+                ld c,_FWRITE
+                call BDOS
+                or a
+                jr nz,snapshot_write_failed
+                ld hl,snapshot_records
+                dec (hl)
+                jr nz,snapshot_record
+
+                ld de,info_fcb
+                ld c,_FCLOSE
+                call BDOS
+                or a
+                ret
+
+snapshot_write_failed:
+                ld de,info_fcb
+                ld c,_FCLOSE
+                call BDOS
+                scf
+                ret
+
 ; Runtime bridge entry. Copied to SYMUNA_CALL and called by the SymbOS daemon.
 bridge_call_code:
                 push ix
@@ -378,20 +478,33 @@ strout:
                 ld c,_STROUT
                 jp BDOS
 
-magic:          db "SYMUNA1",0
+call_ix:
+                jp (ix)
+
+magic:          db "SYMUNA2",0
 tcpip_name:     db "TCP/IP",0
-msg_banner:     db "SYMUNAPI bridge installer",13,10,"$"
-msg_tpa:        db "SYMUNAPI: not enough TPA for bridge",13,10,"$"
-msg_online:     db "SYMUNAPI: TCP/IP UNAPI found",13,10,"$"
+msg_banner:     db "SYMUNAPI provider snapshotter",13,10,"$"
+msg_tpa:        db "SYMUNAPI: not enough TPA for metadata",13,10,"$"
+msg_online:     db "SYMUNAPI: mapped provider captured",13,10,"$"
 msg_nodev:      db "SYMUNAPI: TCP/IP UNAPI not found",13,10,"$"
-msg_installed:  db "SYMUNAPI: bridge installed",13,10,"$"
+msg_unsupported: db "SYMUNAPI: provider type not supported",13,10,"$"
+msg_snapshot:   db "SYMUNAPI: provider capture failed",13,10,"$"
+msg_written:    db "SYMUNAPI: metadata written",13,10,"$"
 bridge_base:    dw 0
 old_sp:         dw 0
 tmp_slot:       db 0
 tmp_segment:    db 0
+tmp_helper:     dw 0
+tmp_reader:     dw 0
+snapshot_source: dw 0
+snapshot_records: db 0
 fcb_template:   db 0,"SYMUNAPI","DAT"
                 ds 24,0
+segment_fcb_template:
+                db 0,"SYMUNAPI","SEG"
+                ds 24,0
 info_fcb:       ds 36,0
+snapshot_dma:   ds 128,0
 
 end:
                 save "SYMUNAPI.COM",#100,end-#100
