@@ -55,6 +55,7 @@ msx-symbos: netd-una.exe build/msx/SYMUNAPI.COM
 stage-msx-symbos: netd-una-scc.exe build/msx/SYMUNAPI.COM
 	mcopy -o -i QA/MSXSYMBOS.IMG@@16384 netd-una.exe ::/SYMBOS/NETD-UNA.EXE
 	mcopy -o -i QA/MSXSYMBOS.IMG@@16384 build/msx/SYMUNAPI.COM ::/SYMUNAPI.COM
+	mcopy -o -i QA/MSXSYMBOS.IMG@@16384 SYMBOS.BAT ::/SYMBOS.BAT
 
 run-msx:
 	bash tools/run_msx.sh

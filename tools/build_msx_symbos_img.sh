@@ -21,6 +21,8 @@ done
     exit 1
 }
 [ -s "$OPENMSXNET_TSR" ] || { echo "ERROR: missing openMSXnet TSR at $OPENMSXNET_TSR" >&2; exit 1; }
+[ -s build/msx/SYMUNAPI.COM ] || { echo "ERROR: missing build/msx/SYMUNAPI.COM" >&2; exit 1; }
+[ -s SYMBOS.BAT ] || { echo "ERROR: missing SYMBOS.BAT" >&2; exit 1; }
 
 mkdir -p QA
 rm -f "$IMG"
@@ -35,12 +37,9 @@ MTOOL="-i $IMG@@$((POFF * 512))"
 mcopy $MTOOL "$DEPS/NEXTOR.SYS" "$DEPS/COMMAND2.COM" ::/
 # shellcheck disable=SC2086
 mcopy $MTOOL "$OPENMSXNET_TSR" ::/UNAPINET.COM
-if [ -s build/msx/SYMUNAPI.COM ]; then
-    mcopy $MTOOL build/msx/SYMUNAPI.COM ::/SYMUNAPI.COM
-    printf 'UNAPINET\r\nSYMUNAPI\r\nCD SYMBOS\r\nSYM\r\n' > build/msx-autoexec.bat
-else
-    printf 'UNAPINET\r\nCD SYMBOS\r\nSYM\r\n' > build/msx-autoexec.bat
-fi
+mcopy $MTOOL build/msx/SYMUNAPI.COM ::/SYMUNAPI.COM
+mcopy $MTOOL SYMBOS.BAT ::/SYMBOS.BAT
+printf 'UNAPINET\r\nSYMBOS\r\n' > build/msx-autoexec.bat
 # shellcheck disable=SC2086
 mcopy $MTOOL build/msx-autoexec.bat ::/AUTOEXEC.BAT
 

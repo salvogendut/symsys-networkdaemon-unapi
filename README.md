@@ -61,10 +61,10 @@ The MSX-DOS boot order must be:
 
 ```text
 UNAPINET              (or the real hardware UNAPI loader)
-SYMUNAPI
-CD SYMBOS
-SYM
+SYMBOS
 ```
+
+`SYMBOS.BAT` runs `SYMUNAPI`, changes to `\SYMBOS`, and launches `SYM`.
 
 Run the repository image with at least 1MB RAM:
 
