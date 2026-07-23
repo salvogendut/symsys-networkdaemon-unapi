@@ -63,6 +63,8 @@ SYMUNA_ENTRY_O  equ 13
 UNAPI_MAPPED    equ 2
 
 UNA_IO_MAX      equ 1024
+UNA_SEND_MAX    equ 512
+UNA_SEND_WAITS  equ 64
 UNA_PROVIDER_SIZE equ #4000
 UNA_BANK_BASE   equ #0400
 UNA_BANK_SIZE   equ #fb00
@@ -128,6 +130,8 @@ una_req_len     dw 0
 una_xfer_len    dw 0
 una_dns_ip      ds 4
 una_status_rec  dw 0
+una_tx_len      dw 0
+una_send_retries db 0
 
 ;==============================================================================
 ;### UNAPI CONTROL #############################################################
@@ -425,45 +429,51 @@ unatop  ld b,a
         ld a,(ix+1):ld (hl),a
         pop bc
 
+        push bc                    ;keep SymbOS socket index across UNAPI calls
         call una_open
         or a
         jr z,unatop_opened
         cp UNA_ERR_NO_FREE
-        jp nz,una_map_call_error
+        jr nz,unatop_error
         call unahav
-        jp nz,una_map_no_free
+        jr nz,unatop_no_free
         call una_abort_all
         call una_open
         or a
-        jp nz,una_map_call_error
+        jr nz,unatop_error
 unatop_opened
         ld a,(una_bc+1)           ;B=UNAPI connection handle
         or a
         jr nz,unatop_handle
+        pop bc
         scf
         ld a,neterruhw
         ret
 unatop_handle
         ld c,a
-        ld a,(una_socket_tmp)
-        ld e,a
-        ld d,0
-        ld hl,una_handles
-        add hl,de
+        pop de                     ;D=SymbOS socket index
+        ld a,d
+        call una_handle_addr
         ld (hl),c
         xor a
         ret
+unatop_error
+        pop bc
+        jp una_map_call_error
+unatop_no_free
+        pop bc
+        jp una_map_no_free
 ;### UNATCL -> close TCP connection
 ;### Input A=socket number
 unatcl  call una_get_handle
         ret c
         ld b,a
+        call una_forget_handle
         ld a,TCPIP_TCP_CLOSE
         ld c,0
         ld de,0
         ld hl,0
         call una_call
-        call una_forget_handle
         xor a
         ret
 
@@ -471,12 +481,12 @@ unatcl  call una_get_handle
 unatdc  call una_get_handle
         ret c
         ld b,a
+        call una_forget_handle
         ld a,TCPIP_TCP_ABORT
         ld c,0
         ld de,0
         ld hl,0
         call una_call
-        call una_forget_handle
         xor a
         ret
 
@@ -568,10 +578,12 @@ una_status_endpoint
 ;### UNATRX -> receive bytes
 ;### Input A=socket number, HL=dest address, E=dest bank, BC=length
 ;### Output BC=remaining bytes
-unatrx  ld (una_xfer_addr),hl
+unatrx  ld (una_socket_tmp),a
+        ld (una_xfer_addr),hl
         ld a,e
         ld (una_xfer_bank),a
         ld (una_req_len),bc
+        ld a,(una_socket_tmp)
         call una_get_handle
         jr c,unatrx_err
         ld (una_handle_tmp),a
@@ -611,17 +623,27 @@ unatrx_err
 ;### UNATTX -> send bytes
 ;### Input A=socket number, HL=source address, E=source bank, BC=length
 ;### Output BC=sent bytes, HL=remaining bytes, ZF=1 if all sent
-unattx  ld (una_xfer_addr),hl
+unattx  ld (una_socket_tmp),a
+        ld (una_xfer_addr),hl
         ld a,e
         ld (una_xfer_bank),a
         ld (una_tx_len),bc
+        ld a,(una_socket_tmp)
         call una_get_handle
         jr c,unattx_fail
         ld (una_handle_tmp),a
         ld bc,(una_tx_len)
-        call una_clamp_io
+        ld hl,UNA_SEND_MAX
+        or a
+        sbc hl,bc
+        jr nc,unattx_len_ok
+        ld bc,UNA_SEND_MAX
+unattx_len_ok
         ld (una_xfer_len),bc
         call una_copy_to_iobuf
+        ld a,UNA_SEND_WAITS
+        ld (una_send_retries),a
+unattx_retry
         ld a,(una_handle_tmp)
         ld b,a
         ld c,1                    ;push data
@@ -630,7 +652,16 @@ unattx  ld (una_xfer_addr),hl
         ld a,TCPIP_TCP_SEND
         call una_call
         or a
+        jr z,unattx_sent
+        cp UNA_ERR_BUFFER
         jr nz,unattx_fail2
+        call una_wait
+        ld hl,una_send_retries
+        dec (hl)
+        jr nz,unattx_retry
+        ld a,UNA_ERR_BUFFER
+        jr unattx_fail2
+unattx_sent
         ld bc,(una_xfer_len)
         ld hl,(una_tx_len)
         or a
@@ -639,13 +670,24 @@ unattx  ld (una_xfer_addr),hl
         or l
         ret
 unattx_fail
+        ld bc,0
+        ld hl,(una_tx_len)
+        scf
+        ret
 unattx_fail2
         ld bc,0
         ld hl,(una_tx_len)
-        or 1
+        cp UNA_ERR_NO_CONN
+        jr z,unattx_disconnected
+        cp UNA_ERR_NO_NET
+        jr z,unattx_disconnected
+        ld a,neterruhw
+        scf
         ret
-
-una_tx_len dw 0
+unattx_disconnected
+        ld a,neterrcon
+        scf
+        ret
 
 ;### UNATSK -> skip received bytes
 unatsk  ld (una_req_len),bc
@@ -1035,12 +1077,8 @@ una_clear_openbuf
 
 una_get_handle
         ld (una_socket_tmp),a
-        cp low_sockmax
-        jr nc,una_get_handle_fail
-        ld e,a
-        ld d,0
-        ld hl,una_handles
-        add hl,de
+        call una_handle_addr
+        jr c,una_get_handle_fail
         ld a,(hl)
         or a
         ret nz
@@ -1051,15 +1089,23 @@ una_get_handle_fail
 
 una_forget_handle
         ld a,(una_socket_tmp)
+        call una_handle_addr
+        ret c
+        xor a
+        ld (hl),a
+        call una_clear_rx_avail
+        ret
+
+; Input A=SymbOS socket index.
+; Output HL=provider-handle byte, CF=1 on bad index.
+una_handle_addr
         cp low_sockmax
         ret nc
         ld e,a
         ld d,0
         ld hl,una_handles
         add hl,de
-        xor a
-        ld (hl),a
-        call una_clear_rx_avail
+        or a
         ret
 
 una_clear_rx_avail

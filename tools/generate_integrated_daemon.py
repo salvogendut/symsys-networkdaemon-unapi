@@ -291,6 +291,37 @@ def main():
 
     text = replace_once(
         text,
+        "        call lowttx\n"
+        "        call netdou\n"
+        "        scf\n"
+        "        ccf\n"
+        "        ret\n",
+        (
+            "        call lowttx\n"
+            "if DRIVER==6\n"
+            "        ret c\n"
+            "endif\n"
+            "        call netdou\n"
+            "        scf\n"
+            "        ccf\n"
+            "        ret\n"
+        ),
+    )
+
+    text = replace_once(
+        text,
+        "stawindat   dw #3501,0,56,26,155,122,0,0,155,122,155,122,155,122,prgicnsml,statxttit,0,stamendat",
+        (
+            "if DRIVER==6\n"
+            "stawindat   dw #3501,0,56,26,155,122,0,0,155,122,155,122,155,122,prgicnsml,statxttit,0,0\n"
+            "else\n"
+            "stawindat   dw #3501,0,56,26,155,122,0,0,155,122,155,122,155,122,prgicnsml,statxttit,0,stamendat\n"
+            "endif"
+        ),
+    )
+
+    text = replace_once(
+        text,
         "App_MsgBuf ds 14",
         (
             "App_MsgBuf ds 14\n"

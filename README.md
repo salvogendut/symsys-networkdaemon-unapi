@@ -150,10 +150,12 @@ make stage-settime-qa
 ```
 
 This replaces only `SYMBOS/SETTIME.COM` in `QA/MSXSYMBOS.IMG`. The probe waits
-up to 15 seconds for the daemon backend, resolves `time.akamai.com`, and runs
-two complete HTTP/1.0 transactions. Each pass reports TCP open, send,
-receive/close, byte count, and the SymbOS network error code on failure.
+up to 15 seconds for the daemon, allows the imported provider 10 seconds to
+settle, resolves `example.com`, and runs two complete HTTP/1.0 transactions.
+Each pass reports TCP open, send, receive/close, byte count, and the SymbOS
+network error code on failure.
 
 Two successful passes confirm that DNS, TCP send/receive, close, and provider
-socket reuse all work. The executable is also available as
-`build/msx/SETTIME.COM`.
+socket reuse all work. A message box displays the final result, while
+`A:/SYMBOS/UNAPITST.LOG` records the latest checkpoint or result for unattended
+boots. The executable is also available as `build/msx/SETTIME.COM`.
