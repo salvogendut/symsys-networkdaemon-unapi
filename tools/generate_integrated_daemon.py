@@ -280,6 +280,17 @@ def main():
 
     text = replace_once(
         text,
+        "tcpfls  call sckget\n"
+        "        ret c\n"
+        "        jp lowtfl\n",
+        "tcpfls  ld c,scktyptcp\n"
+        "        call sckget\n"
+        "        ret c\n"
+        "        jp lowtfl\n",
+    )
+
+    text = replace_once(
+        text,
         "App_MsgBuf ds 14",
         (
             "App_MsgBuf ds 14\n"

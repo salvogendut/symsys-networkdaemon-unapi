@@ -139,3 +139,21 @@ TCP smoke OK
 
 The SymbOS-side `NETRAW 1.1.1.1 80` test has also been verified to return
 `open res=0` through the imported provider.
+
+## Autostart TCP Probe
+
+Build and install the SCC diagnostic under the existing SetTime autostart
+entry:
+
+```sh
+make stage-settime-qa
+```
+
+This replaces only `SYMBOS/SETTIME.COM` in `QA/MSXSYMBOS.IMG`. The probe waits
+up to 15 seconds for the daemon backend, resolves `time.akamai.com`, and runs
+two complete HTTP/1.0 transactions. Each pass reports TCP open, send,
+receive/close, byte count, and the SymbOS network error code on failure.
+
+Two successful passes confirm that DNS, TCP send/receive, close, and provider
+socket reuse all work. The executable is also available as
+`build/msx/SETTIME.COM`.

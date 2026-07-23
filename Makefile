@@ -1,10 +1,11 @@
 ASM ?= rasm
+SCC_CC ?= ../scc/bin/cc
 SCC_AS ?= ../scc/bin/as
 SCC_LD ?= ../scc/bin/ld
 SCC_RELOC ?= ../scc/bin/reloc
 WRAPPER := Dmn-Network-\#UNA.asm
 
-.PHONY: all check check-backend check-wrapper check-scc msx-spike msx-symbos stage-msx-symbos run-msx run-msx-symbos clean
+.PHONY: all check check-backend check-wrapper check-scc check-settime-qa msx-spike msx-symbos stage-msx-symbos stage-settime-qa run-msx run-msx-symbos clean
 
 all: netd-una-scc.exe
 
@@ -31,18 +32,29 @@ build/msx/SYMUNAPI.COM: tools/symunapi_msx.asm
 	mkdir -p build/msx
 	cd build/msx && rasm ../../tools/symunapi_msx.asm
 
+build/settime-qa.o: tools/settime_qa_scc.c
+	mkdir -p build
+	$(SCC_CC) -c tools/settime_qa_scc.c -o build/settime-qa.o
+
+build/msx/SETTIME.COM: build/settime-qa.o
+	mkdir -p build/msx
+	$(SCC_CC) build/settime-qa.o -lnet -o build/msx/SETTIME.COM
+
 check:
 	$(MAKE) check-backend
 	$(MAKE) check-wrapper
 	$(MAKE) check-scc
+	$(MAKE) check-settime-qa
 
 check-backend:
 	$(ASM) tests/backend_syntax.asm -ob /tmp/symbos-unapi-backend.bin
 
 check-wrapper: $(GENERATED)
-	$(ASM) $(WRAPPER) -ob netd-una.exe
+	$(ASM) $(WRAPPER) -ob /tmp/netd-una-wrapper.exe
 
 check-scc: netd-una-scc.exe
+
+check-settime-qa: build/msx/SETTIME.COM
 
 msx-spike:
 	bash tools/build_unapi_spike.sh
@@ -56,6 +68,9 @@ stage-msx-symbos: netd-una-scc.exe build/msx/SYMUNAPI.COM
 	mcopy -o -i QA/MSXSYMBOS.IMG@@16384 netd-una.exe ::/SYMBOS/NETD-UNA.EXE
 	mcopy -o -i QA/MSXSYMBOS.IMG@@16384 build/msx/SYMUNAPI.COM ::/SYMUNAPI.COM
 	mcopy -o -i QA/MSXSYMBOS.IMG@@16384 SYMBOS.BAT ::/SYMBOS.BAT
+
+stage-settime-qa: build/msx/SETTIME.COM
+	mcopy -o -i QA/MSXSYMBOS.IMG@@16384 build/msx/SETTIME.COM ::/SYMBOS/SETTIME.COM
 
 run-msx:
 	bash tools/run_msx.sh

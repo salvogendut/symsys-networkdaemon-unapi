@@ -171,6 +171,7 @@ unaini_detect
         jr c,unaini_fail
         call una_probe_caps
         jr c,unaini_fail
+        call una_abort_all
         ld a,1
         ld (una_ready),a
         ld a,#ff
@@ -424,18 +425,25 @@ unatop  ld b,a
         ld a,(ix+1):ld (hl),a
         pop bc
 
-        ld a,TCPIP_TCP_OPEN
-        ld bc,0
-        ld de,0
-        ld hl,una_trn_openbuf
-        call una_call
+        call una_open
+        or a
+        jr z,unatop_opened
+        cp UNA_ERR_NO_FREE
+        jp nz,una_map_call_error
+        call unahav
+        jp nz,una_map_no_free
+        call una_abort_all
+        call una_open
         or a
         jp nz,una_map_call_error
+unatop_opened
         ld a,(una_bc+1)           ;B=UNAPI connection handle
         or a
+        jr nz,unatop_handle
         scf
-        ld a,65                   ;diagnostic: TCP_OPEN returned no handle
-        ret z
+        ld a,neterruhw
+        ret
+unatop_handle
         ld c,a
         ld a,(una_socket_tmp)
         ld e,a
@@ -531,6 +539,7 @@ unatst_done
 una_status_endpoint
         push af
         push bc
+        push hl
         ld hl,(una_status_rec)
         ld de,sckdatrpo
         add hl,de
@@ -551,6 +560,7 @@ una_status_endpoint
         ld b,(hl)
         push bc
         pop iy
+        pop hl
         pop bc
         pop af
         ret
@@ -684,7 +694,8 @@ unatsk_done
         ret
 
 ;### UNATFL -> flush outgoing data
-unatfl  ret
+unatfl  xor a
+        ret
 
 ;==============================================================================
 ;### UNAPI DNS #################################################################
@@ -984,6 +995,34 @@ una_map_dns_error
         jr z,una_map_no_net
         scf
         ld a,neterrdto
+        ret
+
+; Open using the already prepared UNAPI parameter block.
+una_open
+        ld a,TCPIP_TCP_OPEN
+        ld bc,0
+        ld de,0
+        ld hl,una_trn_openbuf
+        jp una_call
+
+; Abort all transient provider-side TCP connections. This is safe during
+; initialization and when no SymbOS TCP socket currently owns a provider handle.
+una_abort_all
+        ld a,TCPIP_TCP_ABORT
+        ld bc,0
+        ld de,0
+        ld hl,0
+        jp una_call
+
+; Output ZF=1 when no SymbOS TCP socket owns a provider connection.
+unahav
+        ld hl,una_handles
+        ld b,low_sockmax
+        xor a
+unahavl
+        or (hl)
+        inc hl
+        djnz unahavl
         ret
 
 una_clear_openbuf
