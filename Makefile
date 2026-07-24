@@ -5,7 +5,7 @@ SCC_LD ?= ../scc/bin/ld
 SCC_RELOC ?= ../scc/bin/reloc
 WRAPPER := Dmn-Network-\#UNA.asm
 
-.PHONY: all check check-backend check-wrapper check-scc check-settime-qa msx-spike msx-symbos stage-msx-symbos stage-settime-qa run-msx run-msx-symbos clean
+.PHONY: all check check-backend check-wrapper check-scc check-settime-qa legacy-symunapi msx-spike msx-symbos stage-msx-symbos stage-settime-qa run-msx run-msx-symbos clean
 
 all: netd-una-scc.exe
 
@@ -28,9 +28,11 @@ netd-una-scc.exe: build/netd-una-scc.o
 	$(SCC_RELOC) netd-una-scc.exe build/netd-una-scc.rel
 	cp netd-una-scc.exe netd-una.exe
 
-build/msx/SYMUNAPI.COM: tools/symunapi_msx.asm
-	mkdir -p build/msx
-	cd build/msx && rasm ../../tools/symunapi_msx.asm
+build/legacy/SYMUNAPI.COM: LEGACY/symunapi_msx.asm
+	mkdir -p build/legacy
+	cd build/legacy && rasm ../../LEGACY/symunapi_msx.asm
+
+legacy-symunapi: build/legacy/SYMUNAPI.COM
 
 build/settime-qa.o: tools/settime_qa_scc.c
 	mkdir -p build
@@ -59,15 +61,12 @@ check-settime-qa: build/msx/SETTIME.COM
 msx-spike:
 	bash tools/build_unapi_spike.sh
 
-msx-symbos: netd-una.exe build/msx/SYMUNAPI.COM
+msx-symbos: netd-una-scc.exe
 	cp netd-una.exe /var/home/salvogendut/Downloads/MSXSYMBOS/SYMBOS/NETD-UNA.EXE
-	cp build/msx/SYMUNAPI.COM /var/home/salvogendut/Downloads/MSXSYMBOS/SYMUNAPI.COM
 	bash tools/build_msx_symbos_img.sh
 
-stage-msx-symbos: netd-una-scc.exe build/msx/SYMUNAPI.COM
-	mcopy -o -i QA/MSXSYMBOS.IMG@@16384 netd-una.exe ::/SYMBOS/NETD-UNA.EXE
-	mcopy -o -i QA/MSXSYMBOS.IMG@@16384 build/msx/SYMUNAPI.COM ::/SYMUNAPI.COM
-	mcopy -o -i QA/MSXSYMBOS.IMG@@16384 SYMBOS.BAT ::/SYMBOS.BAT
+stage-msx-symbos: netd-una-scc.exe
+	MTOOLS_SKIP_CHECK=1 mcopy -o -i QA/MSXSYMBOS.IMG@@16384 netd-una.exe ::/SYMBOS/NETD-UNA.EXE
 
 stage-settime-qa: build/msx/SETTIME.COM
 	mcopy -o -i QA/MSXSYMBOS.IMG@@16384 build/msx/SETTIME.COM ::/SYMBOS/SETTIME.COM

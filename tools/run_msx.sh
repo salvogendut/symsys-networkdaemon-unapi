@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Launch the UNAPI spike image in openMSX/openMSXnet.
+# Launch an MSX image in openMSX/openMSXnet.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 

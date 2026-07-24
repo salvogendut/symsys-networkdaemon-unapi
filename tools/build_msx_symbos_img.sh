@@ -9,6 +9,7 @@ SIZE_MB="${MSX_IMG_MB:-64}"
 POFF=32
 DEPS="${MSX_DEPS:-../geobench/QA/MSXDEPS}"
 OPENMSXNET_TSR="${MSX_OPENMSXNET_TSR:-../geobench/build/openmsxnet-test/UNAPINET.COM}"
+SNAPSHOT="${MSX_UNAPI_SNAPSHOT_DIR:-QA/UNAPI-SNAPSHOT}"
 
 for t in sfdisk mkfs.fat mcopy mmd; do
     command -v "$t" >/dev/null || { echo "ERROR: missing tool '$t'" >&2; exit 1; }
@@ -21,8 +22,11 @@ done
     exit 1
 }
 [ -s "$OPENMSXNET_TSR" ] || { echo "ERROR: missing openMSXnet TSR at $OPENMSXNET_TSR" >&2; exit 1; }
-[ -s build/msx/SYMUNAPI.COM ] || { echo "ERROR: missing build/msx/SYMUNAPI.COM" >&2; exit 1; }
-[ -s SYMBOS.BAT ] || { echo "ERROR: missing SYMBOS.BAT" >&2; exit 1; }
+[ -s "$SNAPSHOT/SYMUNAPI.DAT" ] && [ -s "$SNAPSHOT/SYMUNAPI.SEG" ] || {
+    echo "ERROR: UNAPI snapshot missing at $SNAPSHOT" >&2
+    echo "Set MSX_UNAPI_SNAPSHOT_DIR to a directory containing SYMUNAPI.DAT and SYMUNAPI.SEG" >&2
+    exit 1
+}
 
 mkdir -p QA
 rm -f "$IMG"
@@ -37,9 +41,7 @@ MTOOL="-i $IMG@@$((POFF * 512))"
 mcopy $MTOOL "$DEPS/NEXTOR.SYS" "$DEPS/COMMAND2.COM" ::/
 # shellcheck disable=SC2086
 mcopy $MTOOL "$OPENMSXNET_TSR" ::/UNAPINET.COM
-mcopy $MTOOL build/msx/SYMUNAPI.COM ::/SYMUNAPI.COM
-mcopy $MTOOL SYMBOS.BAT ::/SYMBOS.BAT
-printf 'UNAPINET\r\nSYMBOS\r\n' > build/msx-autoexec.bat
+printf 'UNAPINET\r\nCD \\SYMBOS\r\nSYM\r\n' > build/msx-autoexec.bat
 # shellcheck disable=SC2086
 mcopy $MTOOL build/msx-autoexec.bat ::/AUTOEXEC.BAT
 
@@ -47,6 +49,8 @@ mcopy $MTOOL build/msx-autoexec.bat ::/AUTOEXEC.BAT
 # explicit creation gives clearer errors if the image is not writable.
 # shellcheck disable=SC2086
 mmd $MTOOL ::/SYMBOS
+# shellcheck disable=SC2086
+mcopy $MTOOL "$SNAPSHOT/SYMUNAPI.DAT" "$SNAPSHOT/SYMUNAPI.SEG" ::/SYMBOS/
 # shellcheck disable=SC2086
 mcopy -s $MTOOL "$SRC/SYMBOS"/* ::/SYMBOS/
 if [ -s "$SRC/SYMBOS.INI" ]; then

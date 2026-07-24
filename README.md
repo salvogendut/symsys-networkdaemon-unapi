@@ -12,6 +12,7 @@ backend with TCP/IP UNAPI calls on MSX hosts.
 - `Dmn-Network-UNAPI.asm` - low-level backend contract for TCP/IP UNAPI.
 - `Dmn-Network-#UNA.asm` - assembler wrapper for the UNAPI daemon variant.
 - `docs/UNAPI_BACKEND.md` - design notes and implementation constraints.
+- `LEGACY/` - one-time provider snapshot and diagnostic utilities.
 
 ## Current Scope
 
@@ -19,8 +20,7 @@ The current backend target is intentionally narrow:
 
 - Detect a mapped TCP/IP UNAPI provider through EXTBIO while MSX-DOS and the
   BIOS are still active.
-- Snapshot the provider with `SYMUNAPI.COM`, then import it into a
-  SymbOS-owned secondary bank.
+- Import a persistent provider snapshot into a SymbOS-owned secondary bank.
 - Invoke the provider with SymbOS `BNKCLL`/`BNKRET`; the MSX kernel's
   `BNK16C` entry is an unimplemented stub and cannot be used.
 - Provide active TCP client open/status/receive/send/close/disconnect.
@@ -30,6 +30,109 @@ The current backend target is intentionally narrow:
 
 ROM/direct providers are not imported yet. The current path requires the mapped
 provider type used by OpenMSXnet and the OCM/SM-X RAM package.
+
+## Install On MSX And SymbOS
+
+### Requirements
+
+- An MSX capable of running SymbOS with at least 1 MB of mapper RAM.
+- A working SymbOS installation on an MSX-DOS or Nextor drive.
+- A mapped TCP/IP UNAPI provider loaded before SymbOS starts. The OCM/SM-X RAM
+  Wi-Fi package is supported.
+- Provider-specific `SYMUNAPI.DAT` and `SYMUNAPI.SEG` files in the SymbOS
+  directory.
+
+Build the production daemon with SCC:
+
+```sh
+make -j4
+```
+
+Copy `netd-una.exe` to the SymbOS directory as:
+
+```text
+A:\SYMBOS\NETD-UNA.EXE
+```
+
+If `A:\SYMBOS\SYMUNAPI.DAT` and `A:\SYMBOS\SYMUNAPI.SEG` already exist for the
+active UNAPI provider, no `SYMUNAPI.COM` invocation is needed. Keep these files
+when removing the old boot utility. For compatibility, the daemon also checks
+the drive root when upgrading an existing installation.
+
+For a fresh installation or after changing the UNAPI provider, create the
+snapshot once:
+
+```sh
+make legacy-symunapi
+```
+
+Copy `build/legacy/SYMUNAPI.COM` to `A:\SYMBOS`, boot to MSX-DOS with the UNAPI
+provider loaded, change to `A:\SYMBOS`, and run it once. It creates
+`SYMUNAPI.DAT` and `SYMUNAPI.SEG` in that directory. `SYMUNAPI.COM` can then be
+removed.
+
+Start SymbOS directly after the hardware UNAPI loader:
+
+```bat
+CD \SYMBOS
+SYM
+```
+
+Do not run `SYMUNAPI.COM` or a repository `SYMBOS.BAT` on every boot.
+
+### Start The Daemon
+
+From SymbOS, launch `A:\SYMBOS\NETD-UNA.EXE` with SymCommander or SymShell. For
+normal use, add that executable to the SymbOS autostart list through Control
+Panel so the daemon starts with the desktop.
+
+A successful start creates the network tray icon. Open it and verify:
+
+- Status is `ONLINE`.
+- Adapter is `MSX TCP/IP UNAPI`.
+- The TCP/IP tab shows the provider's local IP, subnet mask, gateway, and DNS
+  addresses when the provider exposes them.
+
+Network applications use the standard SymbOS Network Daemon API; no
+application-specific UNAPI configuration is required. `NSLOOKUP`, `TELNET`,
+`WGET`, and `SETTIME` have been tested with this daemon.
+
+If the daemon reports `NO DEVICE`, verify that the UNAPI loader ran before
+SymbOS and that the snapshot files match the active provider.
+
+## Install In openMSX
+
+The repository QA setup expects openMSXnet and the installed SymbOS image at
+`QA/MSXSYMBOS.IMG`. Preserve an emulator provider snapshot under:
+
+```text
+QA/UNAPI-SNAPSHOT/SYMUNAPI.DAT
+QA/UNAPI-SNAPSHOT/SYMUNAPI.SEG
+```
+
+Build and stage the current daemon into an existing image:
+
+```sh
+make -j4
+make stage-msx-symbos
+```
+
+Run the image with the openMSXnet extension and 1 MB mapper:
+
+```sh
+tools/run_msx.sh QA/MSXSYMBOS.IMG
+```
+
+The QA image boot sequence is:
+
+```bat
+UNAPINET
+CD \SYMBOS
+SYM
+```
+
+`QA/MSX` is unrelated to the installed SymbOS image. It is an ignored,
+generated staging tree used only by the standalone `make msx-spike` diagnostic.
 
 ## Build Notes
 
@@ -51,20 +154,30 @@ make check
 
 This creates `netd-una-scc.exe` and copies it to `netd-una.exe`.
 
-Stage the daemon and DOS snapshotter in the installed SymbOS QA image:
+Stage the daemon in the installed SymbOS QA image:
 
 ```sh
 make stage-msx-symbos
 ```
 
-The MSX-DOS boot order must be:
+The MSX-DOS boot order for the QA image is:
 
 ```text
 UNAPINET              (or the real hardware UNAPI loader)
-SYMBOS
+CD \SYMBOS
+SYM
 ```
 
-`SYMBOS.BAT` runs `SYMUNAPI`, changes to `\SYMBOS`, and launches `SYM`.
+`SYMUNAPI.COM` and `SYMBOS.BAT` are not part of the normal boot path. The
+daemon still requires persistent `A:/SYMBOS/SYMUNAPI.DAT` and
+`A:/SYMBOS/SYMUNAPI.SEG` provider snapshots. The QA image builder takes these
+from `MSX_UNAPI_SNAPSHOT_DIR`, which defaults to `QA/UNAPI-SNAPSHOT`.
+
+The legacy snapshot utility is retained for creating or refreshing those files:
+
+```sh
+make legacy-symunapi
+```
 
 Run the repository image with at least 1MB RAM:
 
@@ -111,9 +224,10 @@ MSX_SHOTS="20 30" tools/run_msx.sh
 ```
 
 Without the TSR, the expected diagnostic result is "No TCP/IP UNAPI
-implementation found". With it, `SYMUNAPI.COM` writes `SYMUNAPI.DAT` and
-`SYMUNAPI.SEG`; the daemon reports `ONLINE` only after provider `GET_INFO` and
-`GET_CAPAB` calls succeed.
+implementation found". With it, the spike verifies UNAPI discovery and TCP
+operations. The SymbOS daemon separately imports its persistent provider
+snapshot and reports `ONLINE` only after provider `GET_INFO` and `GET_CAPAB`
+calls succeed.
 
 The current smoke test resolves `localhost`, then connects to port 8080 through
 openMSXnet. Run a host HTTP server while launching the emulator:

@@ -32,10 +32,13 @@ The shared daemon calls the backend through these labels:
 The daemon owns the SymbOS process messaging layer and socket records. The UNAPI
 backend only maps between daemon sockets and UNAPI connection handles.
 
-## Discovery And Import
+## Provider Snapshot And Import
 
-`SYMUNAPI.COM` runs under MSX-DOS before `SYM.COM` and discovers TCP/IP UNAPI
-through EXTBIO:
+The daemon imports persistent `A:/SYMBOS/SYMUNAPI.DAT` and
+`A:/SYMBOS/SYMUNAPI.SEG` files, with a drive-root fallback for existing
+installations. It does not require `SYMUNAPI.COM` in the normal boot path. The
+legacy utility under `LEGACY/` is retained only to create or refresh a snapshot
+by discovering TCP/IP UNAPI through EXTBIO:
 
 1. Write `"TCP/IP",0` to the UNAPI argument buffer at `#F847`.
 2. Call EXTBIO (`#FFCA`) with `A=0`, `DE=#2222`.
@@ -45,8 +48,11 @@ through EXTBIO:
 6. For a mapped provider (`HL < #C000`, segment other than `#FF`), obtain the
    UNAPI RAM helper with EXTBIO `A=#FF`.
 7. Read the complete mapped 16K provider through RAMHELPR `READRAM`.
-8. Write metadata to `A:/SYMUNAPI.DAT` and the provider image to
-   `A:/SYMUNAPI.SEG`.
+8. Write metadata to `SYMUNAPI.DAT` and the provider image to `SYMUNAPI.SEG` in
+   the current directory.
+
+Snapshots are provider-specific. They must be refreshed when the loaded UNAPI
+implementation changes.
 
 The daemon reserves `#0400-#FEFF` in a free SymbOS secondary bank and loads the
 snapshot at its original `#4000` address. It installs a wrapper, private stack,

@@ -6,10 +6,10 @@
 ;@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
 
 ; This backend implements the low* contract consumed by Dmn-Network.asm.
-; Under SymbOS we do not call MSX EXTBIO directly. SYMUNAPI.COM must run under
-; MSX-DOS before SYM.COM; it discovers TCP/IP UNAPI and writes metadata plus a
-; complete image of the mapped provider. The daemon imports that image into a
-; dedicated SymbOS bank and invokes it with the kernel interbank-call API.
+; Under SymbOS we do not call MSX EXTBIO directly. The daemon imports persistent
+; A:/SYMBOS/SYMUNAPI.DAT and .SEG provider snapshot files into a dedicated
+; SymbOS bank and invokes that image with the kernel interbank-call API. The
+; legacy SYMUNAPI.COM utility is needed only to create or refresh those files.
 
 ;--- UNAPI CONTROL ROUTINES ---------------------------------------------------
 ;### UNAINI -> init TCP/IP UNAPI and setup daemon-visible network state
@@ -233,10 +233,12 @@ una_shutdown_done
 
 una_load_info_file
         ld hl,una_info_path
-        ld a,(App_BnkNum)
-        db #dd:ld h,a
-        call SyFile_FILOPN
+        call una_open_app_file
+        jr nc,una_load_info_open
+        ld hl,una_inf_old
+        call una_open_app_file
         ret c
+una_load_info_open
         ld (una_info_handle),a
         ld hl,una_info_buf
         ld bc,32
@@ -266,9 +268,17 @@ una_load_fail
         scf
         ret
 
+; Open a file whose path is in the application bank.
+una_open_app_file
+        ld a,(App_BnkNum)
+        db #dd:ld h,a
+        jp SyFile_FILOPN
+
 una_bridge_magic db "SYMUNA2",0
-una_info_path db "A:/SYMUNAPI.DAT",0
-una_provider_path db "A:/SYMUNAPI.SEG",0
+una_info_path db "A:/SYMBOS/SYMUNAPI.DAT",0
+una_provider_path db "A:/SYMBOS/SYMUNAPI.SEG",0
+una_inf_old db "A:/SYMUNAPI.DAT",0
+una_prv_old db "A:/SYMUNAPI.SEG",0
 
 ;### UNA_LOAD_PROVIDER -> reserve a whole bank and import the provider image
 ;### Output CF=0 ok, CF=1 allocation/file/image error
@@ -291,10 +301,12 @@ una_loadp
         jr c,una_loadp_fail
 
         ld hl,una_provider_path
-        ld a,(App_BnkNum)
-        db #dd:ld h,a
-        call SyFile_FILOPN
+        call una_open_app_file
+        jr nc,una_loadp_open
+        ld hl,una_prv_old
+        call una_open_app_file
         jr c,una_loadp_fail
+una_loadp_open
         ld (una_provider_handle),a
         ld hl,UNA_BANK_PROVIDER
         ld a,(una_provider_bank)
