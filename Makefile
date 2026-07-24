@@ -29,7 +29,10 @@ build/legacy/SYMUNAPI.COM: LEGACY/symunapi_msx.asm
 	mkdir -p build/legacy
 	cd build/legacy && rasm ../../LEGACY/symunapi_msx.asm
 
-legacy-symunapi: build/legacy/SYMUNAPI.COM
+SYMUNAPI.COM: build/legacy/SYMUNAPI.COM
+	cp build/legacy/SYMUNAPI.COM SYMUNAPI.COM
+
+legacy-symunapi: SYMUNAPI.COM
 
 build/settime-qa.o: tools/settime_qa_scc.c
 	mkdir -p build
@@ -58,13 +61,14 @@ check-settime-qa: build/msx/SETTIME.COM
 msx-spike:
 	bash tools/build_unapi_spike.sh
 
-msx-symbos: netd-una.exe
+msx-symbos: netd-una.exe SYMUNAPI.COM AUTOEXEC.BAT
 	cp netd-una.exe /var/home/salvogendut/Downloads/MSXSYMBOS/SYMBOS/NETD-UNA.EXE
 	UNAPI_SNAPSHOT_DIR=$(UNAPI_SNAPSHOT_DIR) bash tools/build_msx_symbos_img.sh
 
-stage-msx-symbos: netd-una.exe
+stage-msx-symbos: netd-una.exe SYMUNAPI.COM AUTOEXEC.BAT
 	MTOOLS_SKIP_CHECK=1 mcopy -o -i QA/MSXSYMBOS.IMG@@16384 netd-una.exe ::/SYMBOS/NETD-UNA.EXE
-	MTOOLS_SKIP_CHECK=1 mcopy -o -i QA/MSXSYMBOS.IMG@@16384 $(UNAPI_SNAPSHOT_DIR)/SYMUNAPI.DAT $(UNAPI_SNAPSHOT_DIR)/SYMUNAPI.SEG ::/SYMBOS/
+	MTOOLS_SKIP_CHECK=1 mcopy -o -i QA/MSXSYMBOS.IMG@@16384 SYMUNAPI.COM $(UNAPI_SNAPSHOT_DIR)/SYMUNAPI.DAT $(UNAPI_SNAPSHOT_DIR)/SYMUNAPI.SEG ::/SYMBOS/
+	MTOOLS_SKIP_CHECK=1 mcopy -o -i QA/MSXSYMBOS.IMG@@16384 AUTOEXEC.BAT ::/AUTOEXEC.BAT
 
 stage-settime-qa: build/msx/SETTIME.COM
 	mcopy -o -i QA/MSXSYMBOS.IMG@@16384 build/msx/SETTIME.COM ::/SYMBOS/SETTIME.COM

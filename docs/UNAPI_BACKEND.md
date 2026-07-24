@@ -34,11 +34,10 @@ backend only maps between daemon sockets and UNAPI connection handles.
 
 ## Provider Snapshot And Import
 
-The daemon imports persistent `A:/SYMBOS/SYMUNAPI.DAT` and
+The daemon imports `A:/SYMBOS/SYMUNAPI.DAT` and
 `A:/SYMBOS/SYMUNAPI.SEG` files, with a drive-root fallback for existing
-installations. It does not require `SYMUNAPI.COM` in the normal boot path. The
-legacy utility under `LEGACY/` is retained only to create or refresh a snapshot
-by discovering TCP/IP UNAPI through EXTBIO:
+installations. The tracked `SYMUNAPI.COM` utility creates or refreshes this
+snapshot under MSX-DOS by discovering TCP/IP UNAPI through EXTBIO:
 
 1. Write `"TCP/IP",0` to the UNAPI argument buffer at `#F847`.
 2. Call EXTBIO (`#FFCA`) with `A=0`, `DE=#2222`.
@@ -51,10 +50,11 @@ by discovering TCP/IP UNAPI through EXTBIO:
 8. Write metadata to `SYMUNAPI.DAT` and the provider image to `SYMUNAPI.SEG` in
    the current directory.
 
-The snapshot committed at the repository root has been verified with both the
-openMSXnet QA setup and an OCM laptop using the OCM/SM-X UNAPI RAM package. A
-snapshot should be refreshed when changing to an incompatible mapped UNAPI
-implementation.
+The baseline snapshot committed at the repository root is used by QA. A
+snapshot is not generally portable across mapped-provider builds or Wi-Fi
+configurations. Run `SYMUNAPI.COM` after provider/Wi-Fi initialization whenever
+those settings change. The repository `AUTOEXEC.BAT` does this on every boot
+before launching SymbOS.
 
 The daemon reserves `#0400-#FEFF` in a free SymbOS secondary bank and loads the
 snapshot at its original `#4000` address. It installs a wrapper, private stack,
@@ -151,5 +151,6 @@ Available RX bytes come from `TCPIP_TCP_STATE` output `HL`.
   timeout counters. Successful operations do not depend on expiry, but timeout
   and missing-device paths still require explicit real-hardware stress testing
   under SymbOS.
-- The bridge and committed snapshot are verified under openMSXnet and on an OCM
-  laptop using the OCM/SM-X UNAPI RAM package.
+- The bridge is verified under openMSXnet and on an OCM laptop using the
+  OCM/SM-X UNAPI RAM package. Each environment must use a snapshot of its
+  currently loaded provider.

@@ -13,8 +13,10 @@ backend with TCP/IP UNAPI calls on MSX hosts.
 - `Dmn-Network-#UNA.asm` - assembler wrapper for the UNAPI daemon variant.
 - `docs/UNAPI_BACKEND.md` - design notes and implementation constraints.
 - `netd-una.exe` - SCC-built SymbOS network daemon.
-- `SYMUNAPI.DAT` and `SYMUNAPI.SEG` - verified mapped-provider snapshot.
-- `LEGACY/` - one-time provider snapshot and diagnostic utilities.
+- `SYMUNAPI.COM` - MSX-DOS mapped-provider snapshot utility.
+- `SYMUNAPI.DAT` and `SYMUNAPI.SEG` - baseline QA provider snapshot.
+- `AUTOEXEC.BAT` - openMSXnet/OCM boot template.
+- `LEGACY/` - snapshot utility source and diagnostic utilities.
 
 ## Current Scope
 
@@ -41,8 +43,7 @@ provider type used by OpenMSXnet and the OCM/SM-X RAM package.
 - A working SymbOS installation on an MSX-DOS or Nextor drive.
 - A mapped TCP/IP UNAPI provider loaded before SymbOS starts. The OCM/SM-X RAM
   Wi-Fi package is supported.
-- The included `SYMUNAPI.DAT` and `SYMUNAPI.SEG` files in the SymbOS directory,
-  or another snapshot captured for the active provider.
+- `SYMUNAPI.COM` in the SymbOS directory to capture the active provider.
 
 Build the production daemon with SCC:
 
@@ -50,37 +51,42 @@ Build the production daemon with SCC:
 make -j4
 ```
 
-Copy `netd-una.exe` to the SymbOS directory as:
+Copy the runtime programs to the SymbOS directory as:
 
 ```text
 A:\SYMBOS\NETD-UNA.EXE
+A:\SYMBOS\SYMUNAPI.COM
 ```
 
-If `A:\SYMBOS\SYMUNAPI.DAT` and `A:\SYMBOS\SYMUNAPI.SEG` already exist for the
-active UNAPI provider, no `SYMUNAPI.COM` invocation is needed. Keep these files
-when removing the old boot utility. For compatibility, the daemon also checks
-the drive root when upgrading an existing installation.
-
-For a fresh installation or after changing the UNAPI provider, create the
-snapshot once:
+The utility is built from `LEGACY/symunapi_msx.asm` and the tracked binary can
+be refreshed with:
 
 ```sh
 make legacy-symunapi
 ```
 
-Copy `build/legacy/SYMUNAPI.COM` to `A:\SYMBOS`, boot to MSX-DOS with the UNAPI
-provider loaded, change to `A:\SYMBOS`, and run it once. It creates
-`SYMUNAPI.DAT` and `SYMUNAPI.SEG` in that directory. `SYMUNAPI.COM` can then be
-removed.
+`SYMUNAPI.COM` must run after the hardware UNAPI and Wi-Fi setup, but before
+SymbOS. It writes `SYMUNAPI.DAT` and `SYMUNAPI.SEG` in the current directory.
+These files contain a snapshot of the loaded provider and can change with its
+Wi-Fi configuration.
 
-Start SymbOS directly after the hardware UNAPI loader:
+The supplied `AUTOEXEC.BAT` recognizes the repository openMSXnet setup and the
+standard OCM/SM-X RAM package layout. Install it at `A:\AUTOEXEC.BAT`. Its boot
+order is:
 
 ```bat
+REM Hardware UNAPI and Wi-Fi setup runs first
 CD \SYMBOS
+SYMUNAPI.COM
 SYM
 ```
 
-Do not run `SYMUNAPI.COM` or a repository `SYMBOS.BAT` on every boot.
+If the machine already has a customized `AUTOEXEC.BAT`, preserve its hardware
+and Wi-Fi setup and add the final three commands after that setup. If
+`SYMUNAPI.COM` is not run automatically, run it manually from `A:\SYMBOS`
+whenever the Wi-Fi settings or UNAPI provider change, before starting SymbOS.
+Capturing the 16 KiB mapped provider can take a noticeable amount of time; do
+not interrupt the machine while `SYMUNAPI.COM` is running.
 
 ### Start The Daemon
 
@@ -105,16 +111,16 @@ SymbOS and that the snapshot files match the active provider.
 ## Install In openMSX
 
 The repository QA setup expects openMSXnet and the installed SymbOS image at
-`QA/MSXSYMBOS.IMG`. The default snapshot files are tracked at the repository
-root:
+`QA/MSXSYMBOS.IMG`. Baseline snapshot files are tracked at the repository root:
 
 ```text
 SYMUNAPI.DAT
 SYMUNAPI.SEG
 ```
 
-This exact pair has been verified with the openMSXnet QA setup and on an OCM
-laptop using the OCM/SM-X UNAPI RAM package.
+They are useful for QA, but must not be assumed to match a real machine's
+current mapped provider and Wi-Fi state. The supplied `AUTOEXEC.BAT` refreshes
+them on each boot.
 
 Build and stage the current daemon into an existing image:
 
@@ -123,8 +129,8 @@ make -j4
 make stage-msx-symbos
 ```
 
-The staging target installs both `netd-una.exe` and the selected provider
-snapshot. Override the snapshot for another provider with:
+The staging target installs `netd-una.exe`, `SYMUNAPI.COM`, `AUTOEXEC.BAT`, and
+the selected initial provider snapshot. Override the initial snapshot with:
 
 ```sh
 make UNAPI_SNAPSHOT_DIR=/path/to/provider-snapshot stage-msx-symbos
@@ -141,6 +147,7 @@ The QA image boot sequence is:
 ```bat
 UNAPINET
 CD \SYMBOS
+SYMUNAPI.COM
 SYM
 ```
 
@@ -178,15 +185,16 @@ The MSX-DOS boot order for the QA image is:
 ```text
 UNAPINET              (or the real hardware UNAPI loader)
 CD \SYMBOS
+SYMUNAPI.COM
 SYM
 ```
 
-`SYMUNAPI.COM` and `SYMBOS.BAT` are not part of the normal boot path. The
-daemon still requires persistent `A:/SYMBOS/SYMUNAPI.DAT` and
-`A:/SYMBOS/SYMUNAPI.SEG` provider snapshots. The QA image builder takes these
-from `UNAPI_SNAPSHOT_DIR`, which defaults to the repository root.
+The daemon requires current `A:/SYMBOS/SYMUNAPI.DAT` and
+`A:/SYMBOS/SYMUNAPI.SEG` provider snapshots. `SYMUNAPI.COM` refreshes both
+before SymbOS starts. The QA image builder's initial copies come from
+`UNAPI_SNAPSHOT_DIR`, which defaults to the repository root.
 
-The legacy snapshot utility is retained for creating or refreshing those files:
+Rebuild the tracked snapshot utility with:
 
 ```sh
 make legacy-symunapi
