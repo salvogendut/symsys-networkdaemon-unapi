@@ -51,8 +51,10 @@ by discovering TCP/IP UNAPI through EXTBIO:
 8. Write metadata to `SYMUNAPI.DAT` and the provider image to `SYMUNAPI.SEG` in
    the current directory.
 
-Snapshots are provider-specific. They must be refreshed when the loaded UNAPI
-implementation changes.
+The snapshot committed at the repository root has been verified with both the
+openMSXnet QA setup and an OCM laptop using the OCM/SM-X UNAPI RAM package. A
+snapshot should be refreshed when changing to an incompatible mapped UNAPI
+implementation.
 
 The daemon reserves `#0400-#FEFF` in a free SymbOS secondary bank and loads the
 snapshot at its original `#4000` address. It installs a wrapper, private stack,
@@ -149,5 +151,5 @@ Available RX bytes come from `TCPIP_TCP_STATE` output `HL`.
   timeout counters. Successful operations do not depend on expiry, but timeout
   and missing-device paths still require explicit real-hardware stress testing
   under SymbOS.
-- The bridge is verified under OpenMSXnet: startup reaches `ONLINE` after real
-  `GET_INFO`/`GET_CAPAB` calls and `NETRAW 1.1.1.1 80` returns `open res=0`.
+- The bridge and committed snapshot are verified under openMSXnet and on an OCM
+  laptop using the OCM/SM-X UNAPI RAM package.

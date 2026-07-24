@@ -9,7 +9,7 @@ SIZE_MB="${MSX_IMG_MB:-64}"
 POFF=32
 DEPS="${MSX_DEPS:-../geobench/QA/MSXDEPS}"
 OPENMSXNET_TSR="${MSX_OPENMSXNET_TSR:-../geobench/build/openmsxnet-test/UNAPINET.COM}"
-SNAPSHOT="${MSX_UNAPI_SNAPSHOT_DIR:-QA/UNAPI-SNAPSHOT}"
+SNAPSHOT="${UNAPI_SNAPSHOT_DIR:-.}"
 
 for t in sfdisk mkfs.fat mcopy mmd; do
     command -v "$t" >/dev/null || { echo "ERROR: missing tool '$t'" >&2; exit 1; }
@@ -24,7 +24,7 @@ done
 [ -s "$OPENMSXNET_TSR" ] || { echo "ERROR: missing openMSXnet TSR at $OPENMSXNET_TSR" >&2; exit 1; }
 [ -s "$SNAPSHOT/SYMUNAPI.DAT" ] && [ -s "$SNAPSHOT/SYMUNAPI.SEG" ] || {
     echo "ERROR: UNAPI snapshot missing at $SNAPSHOT" >&2
-    echo "Set MSX_UNAPI_SNAPSHOT_DIR to a directory containing SYMUNAPI.DAT and SYMUNAPI.SEG" >&2
+    echo "Set UNAPI_SNAPSHOT_DIR to a directory containing SYMUNAPI.DAT and SYMUNAPI.SEG" >&2
     exit 1
 }
 

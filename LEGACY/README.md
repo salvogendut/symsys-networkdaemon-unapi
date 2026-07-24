@@ -7,8 +7,9 @@ snapshot consumed by the SymbOS daemon:
 - `unadump_scc.c` and `unadump_scc.o` are the old SymbOS metadata dump probe.
 
 The daemon does not need `SYMUNAPI.COM` on every boot. It does still require
-provider-specific `A:/SYMBOS/SYMUNAPI.DAT` and
-`A:/SYMBOS/SYMUNAPI.SEG` files. Build the legacy utility with:
+`A:/SYMBOS/SYMUNAPI.DAT` and `A:/SYMBOS/SYMUNAPI.SEG` files. The pair committed
+at the repository root is verified with openMSXnet and the tested OCM/SM-X
+setup. Build the legacy utility to capture another mapped provider with:
 
 ```sh
 make legacy-symunapi

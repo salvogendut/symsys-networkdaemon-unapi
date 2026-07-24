@@ -12,6 +12,8 @@ backend with TCP/IP UNAPI calls on MSX hosts.
 - `Dmn-Network-UNAPI.asm` - low-level backend contract for TCP/IP UNAPI.
 - `Dmn-Network-#UNA.asm` - assembler wrapper for the UNAPI daemon variant.
 - `docs/UNAPI_BACKEND.md` - design notes and implementation constraints.
+- `netd-una.exe` - SCC-built SymbOS network daemon.
+- `SYMUNAPI.DAT` and `SYMUNAPI.SEG` - verified mapped-provider snapshot.
 - `LEGACY/` - one-time provider snapshot and diagnostic utilities.
 
 ## Current Scope
@@ -39,8 +41,8 @@ provider type used by OpenMSXnet and the OCM/SM-X RAM package.
 - A working SymbOS installation on an MSX-DOS or Nextor drive.
 - A mapped TCP/IP UNAPI provider loaded before SymbOS starts. The OCM/SM-X RAM
   Wi-Fi package is supported.
-- Provider-specific `SYMUNAPI.DAT` and `SYMUNAPI.SEG` files in the SymbOS
-  directory.
+- The included `SYMUNAPI.DAT` and `SYMUNAPI.SEG` files in the SymbOS directory,
+  or another snapshot captured for the active provider.
 
 Build the production daemon with SCC:
 
@@ -103,18 +105,29 @@ SymbOS and that the snapshot files match the active provider.
 ## Install In openMSX
 
 The repository QA setup expects openMSXnet and the installed SymbOS image at
-`QA/MSXSYMBOS.IMG`. Preserve an emulator provider snapshot under:
+`QA/MSXSYMBOS.IMG`. The default snapshot files are tracked at the repository
+root:
 
 ```text
-QA/UNAPI-SNAPSHOT/SYMUNAPI.DAT
-QA/UNAPI-SNAPSHOT/SYMUNAPI.SEG
+SYMUNAPI.DAT
+SYMUNAPI.SEG
 ```
+
+This exact pair has been verified with the openMSXnet QA setup and on an OCM
+laptop using the OCM/SM-X UNAPI RAM package.
 
 Build and stage the current daemon into an existing image:
 
 ```sh
 make -j4
 make stage-msx-symbos
+```
+
+The staging target installs both `netd-una.exe` and the selected provider
+snapshot. Override the snapshot for another provider with:
+
+```sh
+make UNAPI_SNAPSHOT_DIR=/path/to/provider-snapshot stage-msx-symbos
 ```
 
 Run the image with the openMSXnet extension and 1 MB mapper:
@@ -152,7 +165,7 @@ make -j4
 make check
 ```
 
-This creates `netd-una-scc.exe` and copies it to `netd-una.exe`.
+This creates the SCC-linked production executable `netd-una.exe`.
 
 Stage the daemon in the installed SymbOS QA image:
 
@@ -171,7 +184,7 @@ SYM
 `SYMUNAPI.COM` and `SYMBOS.BAT` are not part of the normal boot path. The
 daemon still requires persistent `A:/SYMBOS/SYMUNAPI.DAT` and
 `A:/SYMBOS/SYMUNAPI.SEG` provider snapshots. The QA image builder takes these
-from `MSX_UNAPI_SNAPSHOT_DIR`, which defaults to `QA/UNAPI-SNAPSHOT`.
+from `UNAPI_SNAPSHOT_DIR`, which defaults to the repository root.
 
 The legacy snapshot utility is retained for creating or refreshing those files:
 
