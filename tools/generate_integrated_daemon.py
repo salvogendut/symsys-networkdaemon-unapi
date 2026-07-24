@@ -291,6 +291,28 @@ def main():
 
     text = replace_once(
         text,
+        "tcprcv2 call lowtrx\n"
+        "        pop iy\n"
+        "        ld l,c\n"
+        "        ld h,b\n"
+        "        pop bc\n",
+        (
+            "tcprcv2 call lowtrx\n"
+            "        pop iy\n"
+            "        ld l,c\n"
+            "        ld h,b\n"
+            "if DRIVER==6\n"
+            "        pop af                  ;discard requested length\n"
+            "        ld c,e                  ;UNAPI may return a short read\n"
+            "        ld b,d\n"
+            "else\n"
+            "        pop bc\n"
+            "endif\n"
+        ),
+    )
+
+    text = replace_once(
+        text,
         "        call lowttx\n"
         "        call netdou\n"
         "        scf\n"

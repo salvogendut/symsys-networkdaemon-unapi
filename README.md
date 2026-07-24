@@ -159,3 +159,21 @@ Two successful passes confirm that DNS, TCP send/receive, close, and provider
 socket reuse all work. A message box displays the final result, while
 `A:/SYMBOS/UNAPITST.LOG` records the latest checkpoint or result for unattended
 boots. The executable is also available as `build/msx/SETTIME.COM`.
+
+## WGET Receive Regression
+
+Start the fragmented fixture server on an address reachable by the MSX:
+
+```sh
+python3 -u tests/http/wget_fixture_server.py --bind 0.0.0.0 --port 8081
+```
+
+Run the installed SymbOS WGET with the host's address:
+
+```bat
+A:\SYMBOS\CMD\WGET.COM http://HOST:8081/WGETFIX.TXT A:\SYMBOS\WGETOUT.TXT
+```
+
+The server splits the status line, headers, and body across separate TCP
+arrivals, then closes immediately after the final fragment. A successful run
+produces a 23-byte `WGETOUT.TXT` identical to `tests/http/WGETFIX.TXT`.

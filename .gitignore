@@ -1,3 +1,4 @@
 build/
 QA/
 netd-una.exe
+__pycache__/

@@ -122,12 +122,14 @@ una_info_buf    ds 32
 
 una_handles     ds low_sockmax
 una_rx_avail    ds low_sockmax*2
+una_close_probe ds low_sockmax
 una_socket_tmp  db 0
 una_handle_tmp  db 0
 una_xfer_addr   dw 0
 una_xfer_bank   db 0
 una_req_len     dw 0
 una_xfer_len    dw 0
+una_rx_done     dw 0
 una_dns_ip      ds 4
 una_status_rec  dw 0
 una_tx_len      dw 0
@@ -455,6 +457,7 @@ unatop_handle
         ld a,d
         call una_handle_addr
         ld (hl),c
+        call una_clear_close_probe
         xor a
         ret
 unatop_error
@@ -508,25 +511,51 @@ unatst  push ix
         call una_call
         or a
         jr nz,unatst_closed
-        ld bc,(una_hl)            ;available RX bytes
-        call una_store_rx_avail
         ld a,(una_bc+1)           ;UNAPI state in B
         cp UNA_TCP_ESTABLISHED
-        ld l,2
-        jr z,unatst_done
+        jr z,unatst_established
         cp UNA_TCP_CLOSE_WAIT
-        ld l,3
-        jr z,unatst_done
+        jr z,unatst_close_wait
         cp UNA_TCP_SYN_SENT
         jr z,unatst_opening
         cp UNA_TCP_SYN_RECEIVED
         jr z,unatst_opening
 unatst_closed
+        ; Some providers collapse CLOSE_WAIT into CLOSED before their final
+        ; queued bytes have been consumed. Preserve any count already observed,
+        ; then offer one synthetic receive event to drain that final packet.
+        call una_get_rx_avail
+        ld a,b
+        or c
+        jr nz,unatst_close_data
+        call una_try_close_probe
+        jr nz,unatst_closed_final
+        ld bc,UNA_IO_MAX
+        call una_store_rx_avail
+unatst_close_data
+        ld l,3
+        jr unatst_done
+unatst_closed_final
         ld bc,0
         call una_store_rx_avail
         ld l,4
         jr unatst_done
+unatst_established
+        ld bc,(una_hl)            ;available RX bytes
+        call una_store_rx_avail
+        call una_clear_close_probe
+        ld l,2
+        jr unatst_done
+unatst_close_wait
+        ld bc,(una_hl)
+        call una_store_rx_avail
+        call una_clear_close_probe
+        ld l,3
+        jr unatst_done
 unatst_opening
+        ld bc,(una_hl)
+        call una_store_rx_avail
+        call una_clear_close_probe
         push bc
         ld a,TCPIP_WAIT
         ld bc,0
@@ -577,24 +606,30 @@ una_status_endpoint
 
 ;### UNATRX -> receive bytes
 ;### Input A=socket number, HL=dest address, E=dest bank, BC=length
-;### Output BC=remaining bytes
+;### Output BC=remaining bytes, DE=bytes copied
 unatrx  ld (una_socket_tmp),a
         ld (una_xfer_addr),hl
         ld a,e
         ld (una_xfer_bank),a
         ld (una_req_len),bc
+        ld hl,0
+        ld (una_rx_done),hl
         ld a,(una_socket_tmp)
         call una_get_handle
         jr c,unatrx_err
         ld (una_handle_tmp),a
+unatrx_loop
         ld bc,(una_req_len)
+        ld a,b
+        or c
+        jr z,unatrx_done
         call una_clamp_io
-        ld (una_req_len),bc
+        ld (una_xfer_len),bc
         ld a,(una_handle_tmp)
         ld b,a
         ld c,0
         ld de,una_trn_iobuf
-        ld hl,(una_req_len)
+        ld hl,(una_xfer_len)
         ld a,TCPIP_TCP_RCV
         call una_call
         or a
@@ -602,6 +637,7 @@ unatrx  ld (una_socket_tmp),a
         cp UNA_ERR_NO_DATA
         jr z,unatrx_none
         ld bc,0
+        ld de,(una_rx_done)
         ret
 unatrx_copy
         ld bc,(una_bc)            ;bytes read
@@ -612,12 +648,30 @@ unatrx_copy
         call una_copy_from_iobuf
         ld bc,(una_xfer_len)
         call una_consume_rx_avail
+        ld hl,(una_rx_done)
+        ld de,(una_xfer_len)
+        add hl,de
+        ld (una_rx_done),hl
+        ld hl,(una_xfer_addr)
+        add hl,de
+        ld (una_xfer_addr),hl
+        ld hl,(una_req_len)
+        or a
+        sbc hl,de
+        ld (una_req_len),hl
+        jr unatrx_loop
+unatrx_done
+        call una_get_rx_avail
+        ld de,(una_rx_done)
         ret
 unatrx_none
+        call una_clear_rx_avail
         ld bc,0
+        ld de,(una_rx_done)
         ret
 unatrx_err
         ld bc,0
+        ld de,(una_rx_done)
         ret
 
 ;### UNATTX -> send bytes
@@ -690,7 +744,10 @@ unattx_disconnected
         ret
 
 ;### UNATSK -> skip received bytes
+;### Output BC=remaining bytes, DE=bytes skipped
 unatsk  ld (una_req_len),bc
+        ld hl,0
+        ld (una_rx_done),hl
         call una_get_handle
         jr c,unatsk_err
         ld (una_handle_tmp),a
@@ -711,9 +768,10 @@ unatsk_loop
         or a
         jr z,unatsk_got
         cp UNA_ERR_NO_DATA
-        jr z,unatsk_done
+        jr z,unatsk_empty
 unatsk_err
         ld bc,0
+        ld de,(una_rx_done)
         ret
 unatsk_got
         ld bc,(una_bc)
@@ -722,6 +780,10 @@ unatsk_got
         or c
         jr z,unatsk_done
         call una_consume_rx_avail
+        ld hl,(una_rx_done)
+        ld de,(una_xfer_len)
+        add hl,de
+        ld (una_rx_done),hl
         ld hl,(una_req_len)
         ld de,(una_xfer_len)
         or a
@@ -731,8 +793,14 @@ unatsk_got
 unatsk_store
         ld (una_req_len),hl
         jr unatsk_loop
+unatsk_empty
+        call una_clear_rx_avail
+        ld bc,0
+        ld de,(una_rx_done)
+        ret
 unatsk_done
         call una_get_rx_avail
+        ld de,(una_rx_done)
         ret
 
 ;### UNATFL -> flush outgoing data
@@ -1094,6 +1162,7 @@ una_forget_handle
         xor a
         ld (hl),a
         call una_clear_rx_avail
+        call una_clear_close_probe
         ret
 
 ; Input A=SymbOS socket index.
@@ -1121,6 +1190,40 @@ una_clear_rx_avail
         ld (hl),a
         inc hl
         ld (hl),a
+        pop hl
+        pop de
+        ret
+
+; Clear the final-receive probe flag for the current SymbOS socket.
+una_clear_close_probe
+        push de
+        push hl
+        ld a,(una_socket_tmp)
+        ld e,a
+        ld d,0
+        ld hl,una_close_probe
+        add hl,de
+        ld (hl),0
+        pop hl
+        pop de
+        ret
+
+; Arm one final receive attempt after a provider reports the connection closed.
+; Output ZF=1 when newly armed, ZF=0 when the probe was already consumed.
+una_try_close_probe
+        push de
+        push hl
+        ld a,(una_socket_tmp)
+        ld e,a
+        ld d,0
+        ld hl,una_close_probe
+        add hl,de
+        ld a,(hl)
+        or a
+        jr nz,una_try_close_done
+        ld (hl),1
+        xor a
+una_try_close_done
         pop hl
         pop de
         ret
