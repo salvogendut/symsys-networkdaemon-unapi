@@ -79,6 +79,7 @@ UNA_PARAM_SIZE  equ 10
 
 TCPIP_GET_INFO  equ 0
 TCPIP_GET_CAPAB equ 1
+TCPIP_GET_IPINFO equ 2
 TCPIP_DNS_Q     equ 6
 TCPIP_DNS_S     equ 7
 TCPIP_TCP_OPEN  equ 13
@@ -134,6 +135,9 @@ una_dns_ip      ds 4
 una_status_rec  dw 0
 una_tx_len      dw 0
 una_send_retries db 0
+una_ipinfo_ptr  dw 0
+una_ipinfo_dst  dw 0
+una_ipinfo_left db 0
 
 ;==============================================================================
 ;### UNAPI CONTROL #############################################################
@@ -397,6 +401,59 @@ una_probe_caps
         ret z
         or a
         ret
+
+;### UNA_GET_IP_CONFIG -> read provider-owned TCP/IP settings
+;### Output     net_ipaadr through net_dnssec contain the reported addresses
+;### Destroyed  AF,BC,DE,HL,IX,IY
+unagip  call unacip
+        ld hl,una_ipinfo_indices
+        ld (una_ipinfo_ptr),hl
+        ld hl,net_ipaadr
+        ld (una_ipinfo_dst),hl
+        ld a,5
+        ld (una_ipinfo_left),a
+unagipl
+        ld hl,(una_ipinfo_ptr)
+        ld b,(hl)
+        inc hl
+        ld (una_ipinfo_ptr),hl
+        ld c,0
+        ld de,0
+        ld hl,0
+        ld a,TCPIP_GET_IPINFO
+        call una_call
+        or a
+        ld hl,(una_ipinfo_dst)
+        jr nz,unagipn
+        ld de,(una_hl)
+        ld (hl),e
+        inc hl
+        ld (hl),d
+        inc hl
+        ld de,(una_de)
+        ld (hl),e
+        inc hl
+        ld (hl),d
+unagipn
+        ld hl,(una_ipinfo_dst)
+        ld de,4
+        add hl,de
+        ld (una_ipinfo_dst),hl
+        ld hl,una_ipinfo_left
+        dec (hl)
+        jr nz,unagipl
+        ret
+
+; Unsupported fields remain 0.0.0.0 instead of retaining stale provider data.
+unacip  ld hl,net_ipaadr
+        ld de,net_ipaadr+1
+        ld bc,19
+        ld (hl),0
+        ldir
+        ret
+
+una_ipinfo_indices
+        db 1,3,4,5,6
 
 ;==============================================================================
 ;### UNAPI TCP #################################################################

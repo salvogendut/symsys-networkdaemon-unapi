@@ -87,10 +87,18 @@ def main():
         (
             "elseif DRIVER==6\n"
             ";### NETINI -> Initializes network hardware (TCP/IP UNAPI)\n"
-            "netini  xor a\n"
+            "netini  ld hl,stactltxh2\n"
+            "        ld (stawindatb1),hl\n"
+            "        ld (stawindatb2),hl\n"
+            "        xor a\n"
             "        call lowini\n"
-            "        ld a,0\n"
-            "        jr c,netini0\n"
+            "        jr nc,netini1\n"
+            "        call unacip\n"
+            "        call cfgipr\n"
+            "        xor a\n"
+            "        jr netini0\n"
+            "netini1 call unagip\n"
+            "        call cfgipr\n"
             "        ld a,-1\n"
             "netini0 ld (net_status),a\n"
             "        ld hl,staupdflg\n"
@@ -175,6 +183,30 @@ def main():
             'statxttxa   db "Adapter: Net4CPC W5100S",0\n'
             "elseif DRIVER==6\n"
             'statxttxa   db "Adapter: MSX TCP/IP UNAPI",0\n'
+            "endif"
+        ),
+    )
+
+    text = replace_once(
+        text,
+        'statxttxh0  db "DHCP",0',
+        (
+            'statxttxh0  db "DHCP",0\n'
+            'if DRIVER==6\n'
+            'statxttxh2  db "UNAPI",0\n'
+            'endif'
+        ),
+    )
+
+    text = replace_once(
+        text,
+        "stactltxh0  dw statxttxh0,2+4\n"
+        "stactltxh1  dw statxttxh1,2+4",
+        (
+            "stactltxh0  dw statxttxh0,2+4\n"
+            "stactltxh1  dw statxttxh1,2+4\n"
+            "if DRIVER==6\n"
+            "stactltxh2  dw statxttxh2,2+4\n"
             "endif"
         ),
     )
@@ -335,7 +367,7 @@ def main():
         "stawindat   dw #3501,0,56,26,155,122,0,0,155,122,155,122,155,122,prgicnsml,statxttit,0,stamendat",
         (
             "if DRIVER==6\n"
-            "stawindat   dw #3501,0,56,26,155,122,0,0,155,122,155,122,155,122,prgicnsml,statxttit,0,0\n"
+            "stawindat   dw #1501,0,56,26,155,122,0,0,155,122,155,122,155,122,prgicnsml,statxttit,0,0\n"
             "else\n"
             "stawindat   dw #3501,0,56,26,155,122,0,0,155,122,155,122,155,122,prgicnsml,statxttit,0,stamendat\n"
             "endif"

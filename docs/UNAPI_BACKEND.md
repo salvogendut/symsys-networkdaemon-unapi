@@ -63,6 +63,7 @@ Direct page-3 and ROM-slot providers are left as later targets.
 
 - `0` - `UNAPI_GET_INFO`
 - `1` - `TCPIP_GET_CAPAB`
+- `2` - `TCPIP_GET_IPINFO`
 - `6` - `TCPIP_DNS_Q`
 - `7` - `TCPIP_DNS_S`
 - `13` - `TCPIP_TCP_OPEN`
@@ -75,6 +76,14 @@ Direct page-3 and ROM-slot providers are left as later targets.
 
 The first milestone requires successful `GET_INFO`, `GET_CAPAB`, DNS query and
 active TCP open/send/receive/close through openMSXnet.
+
+## Provider Network Information
+
+After initialization, the daemon uses `TCPIP_GET_IPINFO` to populate the
+read-only TCP/IP status tab with the local IP address, subnet mask, default
+gateway, and primary and secondary DNS servers. Unsupported fields are shown as
+`0.0.0.0`; openMSXnet currently reports only the local IP, while the MSX-SM
+provider reports all five fields.
 
 ## DNS Integration
 

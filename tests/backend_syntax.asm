@@ -13,6 +13,7 @@ neterrsex       equ 9
 neterrdto       equ 17
 
 net_status      db 0
+net_ipaadr      ds 20
 App_BnkNum      db 0
 jmp_memget      equ #8118
 jmp_memfre      equ #811b
