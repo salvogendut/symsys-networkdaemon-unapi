@@ -103,6 +103,10 @@ UNA_TCP_SYN_RECEIVED equ 3
 UNA_TCP_ESTABLISHED  equ 4
 UNA_TCP_CLOSE_WAIT   equ 7
 
+UNA_CLOSE_IDLE       equ 0
+UNA_CLOSE_DRAINING   equ 1
+UNA_CLOSE_EXHAUSTED  equ 2
+
 ;--- BACKEND STATE ------------------------------------------------------------
 
 una_ready       db 0
@@ -592,17 +596,24 @@ unatst  push ix
 unatst_closed
         ; Some providers collapse CLOSE_WAIT into CLOSED before their final
         ; queued bytes have been consumed. Preserve any count already observed,
-        ; then offer one synthetic receive event to drain that final packet.
+        ; then keep offering synthetic receive events until TCP_RCV proves that
+        ; the provider queue is empty. The queue can span multiple I/O blocks.
+        call una_close_state
+        cp UNA_CLOSE_EXHAUSTED
+        jr z,unatst_closed_final
+        call una_close_begin
         call una_get_rx_avail
         ld a,b
         or c
-        jr nz,unatst_close_data
-        call una_try_close_probe
-        jr nz,unatst_closed_final
+        jr nz,unatst_close_drain
         ld bc,UNA_IO_MAX
         call una_store_rx_avail
-unatst_close_data
-        ld l,3
+unatst_close_drain
+        ; Do not publish the close status with a synthetic partial block: the
+        ; high-level daemon would queue a close event immediately after the
+        ; data event, before another probe can discover the rest of the queue.
+        ; Keep the socket logically established until TCP_RCV reports empty.
+        ld l,2
         jr unatst_done
 unatst_closed_final
         ld bc,0
@@ -734,6 +745,7 @@ unatrx_done
         ld de,(una_rx_done)
         ret
 unatrx_none
+        call una_close_empty
         call una_clear_rx_avail
         ld bc,0
         ld de,(una_rx_done)
@@ -863,6 +875,7 @@ unatsk_store
         ld (una_req_len),hl
         jr unatsk_loop
 unatsk_empty
+        call una_close_empty
         call una_clear_rx_avail
         ld bc,0
         ld de,(una_rx_done)
@@ -1277,9 +1290,9 @@ una_clear_close_probe
         pop de
         ret
 
-; Arm one final receive attempt after a provider reports the connection closed.
-; Output ZF=1 when newly armed, ZF=0 when the probe was already consumed.
-una_try_close_probe
+; Return the closed-provider receive state for the current SymbOS socket.
+; Output A=UNA_CLOSE_*.
+una_close_state
         push de
         push hl
         ld a,(una_socket_tmp)
@@ -1289,12 +1302,47 @@ una_try_close_probe
         add hl,de
         ld a,(hl)
         or a
-        jr nz,una_try_close_done
-        ld (hl),1
-        xor a
-una_try_close_done
         pop hl
         pop de
+        ret
+
+; Record that CLOSED has been observed and its hidden receive queue is being
+; drained. The following zero-byte TCP_RCV may then prove the queue exhausted.
+una_close_begin
+        push af
+        push de
+        push hl
+        ld a,(una_socket_tmp)
+        ld e,a
+        ld d,0
+        ld hl,una_close_probe
+        add hl,de
+        ld (hl),UNA_CLOSE_DRAINING
+        pop hl
+        pop de
+        pop af
+        ret
+
+; Mark the provider queue exhausted only when a zero-byte TCP_RCV occurs while
+; CLOSED draining is active. A transient empty read while ESTABLISHED must not
+; suppress a later final-data probe if the provider closes before the next poll.
+una_close_empty
+        push af
+        push de
+        push hl
+        ld a,(una_socket_tmp)
+        ld e,a
+        ld d,0
+        ld hl,una_close_probe
+        add hl,de
+        ld a,(hl)
+        cp UNA_CLOSE_DRAINING
+        jr nz,una_close_empty_done
+        ld (hl),UNA_CLOSE_EXHAUSTED
+una_close_empty_done
+        pop hl
+        pop de
+        pop af
         ret
 
 ;### UNA_CLAMP_IO -> BC=min(BC, UNA_IO_MAX)
