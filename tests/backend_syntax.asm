@@ -17,6 +17,7 @@ net_ipaadr      ds 20
 App_BnkNum      db 0
 jmp_memget      equ #8118
 jmp_memfre      equ #811b
+jmp_mtgcnt      equ #8109
 jmp_bnkcop      equ #8130
 jmp_bnkcll      equ #ff03
 jmp_bnkret      equ #ff00
@@ -26,6 +27,8 @@ SyFile_FILCLO   equ 0
 prgpstmem       equ 48
 sckdatrpo       equ 0
 sckdatrip       equ 2
+sckdatsta       equ 2
+sckstates       equ 2
 App_BegCode     ds 256
 pck_buffer      ds 577
 una_tramp_fn    db 0

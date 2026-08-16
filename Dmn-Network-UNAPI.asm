@@ -105,7 +105,9 @@ UNA_TCP_CLOSE_WAIT   equ 7
 
 UNA_CLOSE_IDLE       equ 0
 UNA_CLOSE_DRAINING   equ 1
-UNA_CLOSE_EXHAUSTED  equ 2
+UNA_CLOSE_QUIET      equ 2
+UNA_CLOSE_EXHAUSTED  equ 3
+UNA_CLOSE_GRACE      equ 100  ;two seconds at MTGCNT's documented 50 Hz
 
 ;--- BACKEND STATE ------------------------------------------------------------
 
@@ -128,6 +130,8 @@ una_info_buf    ds 32
 una_handles     ds low_sockmax
 una_rx_avail    ds low_sockmax*2
 una_close_probe ds low_sockmax
+una_close_quiet_at ds low_sockmax*2
+una_rx_seen     ds low_sockmax
 una_socket_tmp  db 0
 una_handle_tmp  db 0
 una_xfer_addr   dw 0
@@ -531,6 +535,7 @@ unatop_handle
         call una_handle_addr
         ld (hl),c
         call una_clear_close_probe
+        call una_clear_rx_seen
         xor a
         ret
 unatop_error
@@ -584,16 +589,58 @@ unatst  push ix
         call una_call
         or a
         jr nz,unatst_closed
+        ld bc,(una_hl)            ;provider-reported available RX bytes
+        ld a,b
+        or c
+        call nz,una_mark_rx_seen
         ld a,(una_bc+1)           ;UNAPI state in B
         cp UNA_TCP_ESTABLISHED
         jr z,unatst_established
         cp UNA_TCP_CLOSE_WAIT
-        jr z,unatst_close_wait
+        jr z,unatst_closing
         cp UNA_TCP_SYN_SENT
-        jr z,unatst_opening
+        jp z,unatst_opening
         cp UNA_TCP_SYN_RECEIVED
-        jr z,unatst_opening
+        jp z,unatst_opening
+        ; A successful CLOSED report may still expose a real receive count.
+        ; Prefer that count and re-arm draining even if an earlier quiet probe
+        ; had expired before these late bytes became visible.
+        ld a,b
+        or c
+        jr z,unatst_closed
+        jr unatst_closing_data
+unatst_closing
+        ; CLOSE_WAIT may be reported before all receive chunks have crossed the
+        ; provider boundary. Keep it logically established and use the same
+        ; bounded drain as CLOSED instead of publishing an early close event.
+        ld a,b
+        or c
+        jr z,unatst_closed
+unatst_closing_data
+        call una_store_rx_avail
+        call una_clear_close_probe
+        call una_close_begin
+        jr unatst_close_drain
 unatst_closed
+        ; Do not synthesize data before this socket has reported any real RX
+        ; bytes. Some providers transiently expose CLOSED while a connected
+        ; socket is waiting for its first response; probing that empty queue
+        ; would otherwise mark it exhausted and hide the later response. A
+        ; nonzero TCP_STATE count above admits fast response+close sockets even
+        ; if no separate ESTABLISHED poll was observed.
+        call una_rx_seen_state
+        or a
+        jr nz,unatst_closed_drain_ready
+        ld hl,(una_status_rec)
+        ld de,sckdatsta
+        add hl,de
+        ld a,(hl)
+        and 127
+        cp sckstates
+        jr c,unatst_closed_unsettled
+        ld l,sckstates           ;established, still waiting for first byte
+        jr unatst_closed_wait_first
+unatst_closed_drain_ready
         ; Some providers collapse CLOSE_WAIT into CLOSED before their final
         ; queued bytes have been consumed. Preserve any count already observed,
         ; then keep offering synthetic receive events until TCP_RCV proves that
@@ -601,6 +648,13 @@ unatst_closed
         call una_close_state
         cp UNA_CLOSE_EXHAUSTED
         jr z,unatst_closed_final
+        cp UNA_CLOSE_QUIET
+        jr nz,unatst_closed_active
+        call una_close_grace_pending
+        jr c,unatst_closed_active
+        call una_close_exhaust
+        jr unatst_closed_final
+unatst_closed_active
         call una_close_begin
         call una_get_rx_avail
         ld a,b
@@ -620,17 +674,18 @@ unatst_closed_final
         call una_store_rx_avail
         ld l,4
         jr unatst_done
+unatst_closed_unsettled
+        ld l,a                  ;preserve listening/opening status
+unatst_closed_wait_first
+        ld bc,0
+        call una_store_rx_avail
+        call una_clear_close_probe
+        jr unatst_done
 unatst_established
         ld bc,(una_hl)            ;available RX bytes
         call una_store_rx_avail
         call una_clear_close_probe
         ld l,2
-        jr unatst_done
-unatst_close_wait
-        ld bc,(una_hl)
-        call una_store_rx_avail
-        call una_clear_close_probe
-        ld l,3
         jr unatst_done
 unatst_opening
         ld bc,(una_hl)
@@ -696,7 +751,7 @@ unatrx  ld (una_socket_tmp),a
         ld (una_rx_done),hl
         ld a,(una_socket_tmp)
         call una_get_handle
-        jr c,unatrx_err
+        jp c,unatrx_err
         ld (una_handle_tmp),a
 unatrx_loop
         ld bc,(una_req_len)
@@ -725,6 +780,8 @@ unatrx_copy
         ld a,b
         or c
         jr z,unatrx_none
+        call una_mark_rx_seen
+        call una_close_data
         call una_copy_from_iobuf
         ld bc,(una_xfer_len)
         call una_consume_rx_avail
@@ -1245,6 +1302,7 @@ una_forget_handle
         ld (hl),a
         call una_clear_rx_avail
         call una_clear_close_probe
+        call una_clear_rx_seen
         ret
 
 ; Input A=SymbOS socket index.
@@ -1290,6 +1348,51 @@ una_clear_close_probe
         pop de
         ret
 
+; Clear whether the current SymbOS socket has observed real received bytes.
+una_clear_rx_seen
+        push de
+        push hl
+        ld a,(una_socket_tmp)
+        ld e,a
+        ld d,0
+        ld hl,una_rx_seen
+        add hl,de
+        ld (hl),0
+        pop hl
+        pop de
+        ret
+
+; Record that TCP_STATE or TCP_RCV exposed at least one real received byte.
+una_mark_rx_seen
+        push af
+        push de
+        push hl
+        ld a,(una_socket_tmp)
+        ld e,a
+        ld d,0
+        ld hl,una_rx_seen
+        add hl,de
+        ld (hl),1
+        pop hl
+        pop de
+        pop af
+        ret
+
+; Output A=0 until the current socket has observed real received bytes.
+una_rx_seen_state
+        push de
+        push hl
+        ld a,(una_socket_tmp)
+        ld e,a
+        ld d,0
+        ld hl,una_rx_seen
+        add hl,de
+        ld a,(hl)
+        or a
+        pop hl
+        pop de
+        ret
+
 ; Return the closed-provider receive state for the current SymbOS socket.
 ; Output A=UNA_CLOSE_*.
 una_close_state
@@ -1317,15 +1420,39 @@ una_close_begin
         ld d,0
         ld hl,una_close_probe
         add hl,de
+        ld a,(hl)
+        or a
+        jr nz,una_close_begin_done
         ld (hl),UNA_CLOSE_DRAINING
+una_close_begin_done
         pop hl
         pop de
         pop af
         ret
 
-; Mark the provider queue exhausted only when a zero-byte TCP_RCV occurs while
-; CLOSED draining is active. A transient empty read while ESTABLISHED must not
-; suppress a later final-data probe if the provider closes before the next poll.
+; A real receive while CLOSED restarts the quiet window. Calls made while the
+; provider is still ESTABLISHED leave the close state idle.
+una_close_data
+        push af
+        push de
+        push hl
+        ld a,(una_socket_tmp)
+        ld e,a
+        ld d,0
+        ld hl,una_close_probe
+        add hl,de
+        ld a,(hl)
+        or a
+        jr z,una_close_data_done
+        ld (hl),UNA_CLOSE_DRAINING
+una_close_data_done
+        pop hl
+        pop de
+        pop af
+        ret
+
+; The first empty receive while CLOSED starts a bounded quiet interval. Further
+; empty probes do not move its timestamp, so true EOF cannot spin forever.
 una_close_empty
         push af
         push de
@@ -1338,8 +1465,68 @@ una_close_empty
         ld a,(hl)
         cp UNA_CLOSE_DRAINING
         jr nz,una_close_empty_done
-        ld (hl),UNA_CLOSE_EXHAUSTED
+        ld (hl),UNA_CLOSE_QUIET
+        ld hl,jmp_mtgcnt
+        rst #28
+        push ix
+        pop de
+        push de
+        ld a,(una_socket_tmp)
+        add a
+        ld e,a
+        ld d,0
+        ld hl,una_close_quiet_at
+        add hl,de
+        pop de
+        ld (hl),e
+        inc hl
+        ld (hl),d
 una_close_empty_done
+        pop hl
+        pop de
+        pop af
+        ret
+
+; Output CF=1 while the CLOSED quiet interval has not expired. The subtraction
+; is deliberately modular so a 16-bit MTGCNT wrap is harmless.
+una_close_grace_pending
+        push de
+        push hl
+        ld a,(una_socket_tmp)
+        add a
+        ld e,a
+        ld d,0
+        ld hl,una_close_quiet_at
+        add hl,de
+        ld e,(hl)
+        inc hl
+        ld d,(hl)
+        push de
+        ld hl,jmp_mtgcnt
+        rst #28
+        push ix
+        pop hl
+        pop de
+        or a
+        sbc hl,de
+        ld de,UNA_CLOSE_GRACE
+        or a
+        sbc hl,de
+        pop hl
+        pop de
+        ret
+
+; Mark the current socket's CLOSED receive queue definitively exhausted.
+una_close_exhaust
+        push af
+        push de
+        push hl
+        ld a,(una_socket_tmp)
+        ld e,a
+        ld d,0
+        ld hl,una_close_probe
+        add hl,de
+        ld (hl),UNA_CLOSE_EXHAUSTED
         pop hl
         pop de
         pop af

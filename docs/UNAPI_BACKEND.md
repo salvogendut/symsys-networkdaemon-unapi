@@ -134,10 +134,19 @@ UNAPI TCP states map to daemon socket states as follows:
 
 - `2` or `3` (`SYN_SENT`, `SYN_RECEIVED`) -> daemon opening/in process.
 - `4` (`ESTABLISHED`) -> daemon established.
-- `7` (`CLOSE_WAIT`) -> daemon close-wait.
-- anything else after a failed state call -> daemon closed.
+- `7` (`CLOSE_WAIT`) and provider `CLOSED` remain logically established while
+  the receive queue is drained. Some providers expose these states before all
+  final bytes cross the provider boundary, so the backend probes in 1024-byte
+  blocks and requires a two-second, MTGCNT-based quiet interval before
+  publishing daemon closed.
+- A provisional close before the first real received byte preserves the
+  opening/established state; the client timeout remains authoritative for a
+  connection that never produces a response.
 
-Available RX bytes come from `TCPIP_TCP_STATE` output `HL`.
+Available RX bytes come from `TCPIP_TCP_STATE` output `HL`. The generated
+`DRIVER=6` polling path preserves the larger of that count and the daemon's
+cached unread count until `TCPRCV` consumes it, so a later close poll cannot
+erase data that the application has not read.
 
 ## Implementation Risks
 
