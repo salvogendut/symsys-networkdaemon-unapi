@@ -6,7 +6,7 @@ SCC_RELOC ?= ../scc/bin/reloc
 UNAPI_SNAPSHOT_DIR ?= .
 WRAPPER := Dmn-Network-\#UNA.asm
 
-.PHONY: all check check-backend check-wrapper check-scc check-settime-qa legacy-symunapi msx-spike msx-symbos stage-msx-symbos stage-settime-qa run-msx run-msx-symbos clean
+.PHONY: all check check-backend check-wrapper check-generated check-scc check-settime-qa legacy-symunapi msx-spike msx-symbos stage-msx-symbos stage-settime-qa run-msx run-msx-symbos clean
 
 all: netd-una.exe
 
@@ -45,6 +45,7 @@ build/msx/SETTIME.COM: build/settime-qa.o
 check:
 	$(MAKE) check-backend
 	$(MAKE) check-wrapper
+	$(MAKE) check-generated
 	$(MAKE) check-scc
 	$(MAKE) check-settime-qa
 
@@ -53,6 +54,9 @@ check-backend:
 
 check-wrapper: $(GENERATED)
 	$(ASM) $(WRAPPER) -ob /tmp/netd-una-wrapper.exe
+
+check-generated: $(GENERATED)
+	python3 tests/check_generated_daemon.py
 
 check-scc: netd-una.exe
 

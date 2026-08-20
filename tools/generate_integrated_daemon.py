@@ -323,6 +323,91 @@ def main():
 
     text = replace_once(
         text,
+        "        ex (sp),ix              ;ix=data record\n"
+        "        ld l,(ix+sckdatsta)\n",
+        (
+            "        ex (sp),ix              ;ix=data record\n"
+            "if DRIVER==6\n"
+            "        ; A provider close/status poll must not erase bytes that\n"
+            "        ; the application has not consumed yet.  Merge the new\n"
+            "        ; provider count into the cached count before the status\n"
+            "        ; equality shortcut, and retain the data-ready flag while\n"
+            "        ; either count is nonzero.  TCPRCV is the only path that\n"
+            "        ; may reduce the cached count.\n"
+            "        push af\n"
+            "        push de                 ;preserve remote port\n"
+            "        ld e,(ix+sckdatrcv+0)\n"
+            "        ld d,(ix+sckdatrcv+1)  ;DE=previous unread count\n"
+            "        ld h,b\n"
+            "        ld l,c                  ;HL=provider unread count\n"
+            "        or a\n"
+            "        sbc hl,de\n"
+            "        jr nc,nettcp6_count\n"
+            "        ld c,e\n"
+            "        ld b,d                  ;keep the larger cached count\n"
+            "nettcp6_count\n"
+            "        ld (ix+sckdatrcv+0),c  ;update even if status is unchanged\n"
+            "        ld (ix+sckdatrcv+1),b\n"
+            "        pop de\n"
+            "        ld a,b\n"
+            "        or c\n"
+            "        jr z,nettcp6_empty\n"
+            "        pop af\n"
+            "        set 7,a                 ;cached bytes remain readable\n"
+            "        jr nettcp6_merged\n"
+            "nettcp6_empty\n"
+            "        pop af\n"
+            "nettcp6_merged\n"
+            "endif\n"
+            "        ld l,(ix+sckdatsta)\n"
+        ),
+    )
+
+    # The UNAPI pending-count merge above makes the TCP poll path longer than
+    # the Z80 relative-branch range.  Keep these branches explicit in the
+    # generated integration rather than depending on source-layout accidents.
+    text = replace_once(
+        text,
+        "netpol4 push ix\n"
+        "        cp 2\n"
+        "        jr c,nettcp\n"
+        "        jr z,netudp\n"
+        "        jr netdns\n",
+        (
+            "netpol4 push ix\n"
+            "        cp 2\n"
+            "        jp c,nettcp\n"
+            "        jp z,netudp\n"
+            "        jp netdns\n"
+        ),
+    )
+    text = replace_once(
+        text,
+        "        ld a,l                  ;test, if connection status changed\n"
+        "        cp h\n"
+        "        jr z,netpol0\n"
+        "nettcp2 res 7,l                 ;send \"connection status\" event\n"
+        "        call nettcp3\n"
+        "        jr netpol0\n",
+        (
+            "        ld a,l                  ;test, if connection status changed\n"
+            "        cp h\n"
+            "        jp z,netpol0\n"
+            "nettcp2 res 7,l                 ;send \"connection status\" event\n"
+            "        call nettcp3\n"
+            "        jp netpol0\n"
+        ),
+    )
+    text = replace_once(
+        text,
+        "netudp  ;...\n"
+        "        jr netpol0\n",
+        "netudp  ;...\n"
+        "        jp netpol0\n",
+    )
+
+    text = replace_once(
+        text,
         "tcprcv2 call lowtrx\n"
         "        pop iy\n"
         "        ld l,c\n"
