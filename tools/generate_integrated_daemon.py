@@ -125,14 +125,24 @@ def main():
             "dnsrqs  ld de,pck_buffer+3\n"
             "        ld bc,256\n"
             "        ldir\n"
-            "        jp unadns\n"
+            "        call unadns\n"
+            "        jr c,dnsrqs1\n"
+            "        xor a\n"
+            "dnsrqs1 ld (dnsrqse),a\n"
+            "        ret\n"
             "\n"
             ";### DNSRQR -> check for DNS resolve\n"
             ";### Input      DNSRQS has been called before\n"
             ";### Output     CF=0 -> IP received, IX,IY=IP\n"
             ";###            CF=1 -> A=status (0=still in progress, >0=error)\n"
             ";### Destroyed  AF,BC,DE,HL,IX,IY\n"
-            "dnsrqr  jp unadnr\n"
+            "dnsrqse db 0        ;error returned while starting the query\n"
+            "\n"
+            "dnsrqr  ld a,(dnsrqse)\n"
+            "        or a\n"
+            "        scf\n"
+            "        ret nz\n"
+            "        jp unadnr\n"
             "\n"
             "elseif M4BOARD==1        ;*** HIGH LEVEL BASED (using external function) for M4Board"
         ),
@@ -319,6 +329,79 @@ def main():
         "        call sckget\n"
         "        ret c\n"
         "        jp lowtfl\n",
+    )
+
+    text = replace_once(
+        text,
+        "dnslupflg   db 0    ;1=dns lookup in process",
+        (
+            "dnslupflg   db 0    ;1=dns lookup in process\n"
+            "if DRIVER==6\n"
+            "; Keep queued names in daemon-owned memory. The caller may be\n"
+            "; banked out or terminate before its asynchronous request runs.\n"
+            "dnsrqbuf    ds 256*low_sockmax\n"
+            "endif"
+        ),
+    )
+
+    text = replace_once(
+        text,
+        "        ld a,(App_BnkNum)\n"
+        "        add a:add a:add a:add a\n"
+        "        add (ix+sckdatbnk+0)\n"
+        "        ld l,(ix+sckdatbnk+1)\n"
+        "        ld h,(ix+sckdatbnk+2)\n"
+        "        ld de,pck_buffer+576-256\n"
+        "        ld bc,256\n"
+        "        push de\n"
+        "        rst #20:dw jmp_bnkcop       ;copy domain name string to own buffer\n"
+        "        pop hl\n"
+        "        ld a,(netpols+1)",
+        (
+            "if DRIVER==6\n"
+            "        ld h,c\n"
+            "        ld l,0\n"
+            "        ld de,dnsrqbuf\n"
+            "        add hl,de               ;queued daemon-owned hostname\n"
+            "else\n"
+            "        ld a,(App_BnkNum)\n"
+            "        add a:add a:add a:add a\n"
+            "        add (ix+sckdatbnk+0)\n"
+            "        ld l,(ix+sckdatbnk+1)\n"
+            "        ld h,(ix+sckdatbnk+2)\n"
+            "        ld de,pck_buffer+576-256\n"
+            "        ld bc,256\n"
+            "        push de\n"
+            "        rst #20:dw jmp_bnkcop       ;copy domain name string to own buffer\n"
+            "        pop hl\n"
+            "endif\n"
+            "        ld a,(netpols+1)"
+        ),
+    )
+
+    text = replace_once(
+        text,
+        "        ld (iy+sckdatbnk+0),c       ;save data and status\n"
+        "        ld (iy+sckdatbnk+1),l\n"
+        "        ld (iy+sckdatbnk+2),h\n"
+        "        ld (iy+sckdatsta),sckstadrq",
+        (
+            "if DRIVER==6\n"
+            "        ld h,a\n"
+            "        ld l,0\n"
+            "        ld de,dnsrqbuf\n"
+            "        add hl,de\n"
+            "        ex de,hl\n"
+            "        ld hl,pck_buffer\n"
+            "        ld bc,256\n"
+            "        ldir                    ;snapshot validated caller hostname\n"
+            "else\n"
+            "        ld (iy+sckdatbnk+0),c       ;save data and status\n"
+            "        ld (iy+sckdatbnk+1),l\n"
+            "        ld (iy+sckdatbnk+2),h\n"
+            "endif\n"
+            "        ld (iy+sckdatsta),sckstadrq"
+        ),
     )
 
     text = replace_once(

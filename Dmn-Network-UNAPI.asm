@@ -990,7 +990,7 @@ unadns_call
 ;### Destroyed  AF,BC,DE,HL,IX,IY
 unadnr  call una_wait
         ld a,TCPIP_DNS_S
-        ld bc,0
+        ld bc,#0100             ;B bit 0: consume this result/error
         ld de,0
         ld hl,0
         call una_call

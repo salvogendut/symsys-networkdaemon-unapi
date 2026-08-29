@@ -222,7 +222,23 @@ int main(void) {
     Shell_Print("\r\n");
 
     first = run_transaction(1, ip);
+#ifdef PROBE_LOCAL
     second = run_transaction(2, ip);
+#else
+    Shell_Print("\r\nRepeat DNS... ");
+    write_progress("Pass 2: resolving DNS");
+    if (DNS_Resolve(_symbank, host, ip) < 0) {
+        failure_step = "DNS repeat";
+        failure_error = (unsigned char)_neterr;
+        print_error();
+        second = -1;
+    } else {
+        Shell_Print("OK ip=");
+        print_ip(ip);
+        Shell_Print("\r\n");
+        second = run_transaction(2, ip);
+    }
+#endif
 
     Shell_Print("\r\nResult: ");
     if (!first && !second) {
