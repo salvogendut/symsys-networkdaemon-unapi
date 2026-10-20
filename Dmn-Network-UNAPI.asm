@@ -721,8 +721,8 @@ una_status_endpoint
         inc hl
         ld d,(hl)
         ld hl,(una_status_rec)
-        ld de,sckdatrip
-        add hl,de
+        ld bc,sckdatrip          ;keep DE=remote port for the caller
+        add hl,bc
         ld c,(hl)
         inc hl
         ld b,(hl)
